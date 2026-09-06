@@ -34,6 +34,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anywhere.transcript.R
+import com.anywhere.transcript.data.DeviceTier
+import com.anywhere.transcript.data.ModelCatalog
 import com.anywhere.transcript.ui.AppViewModel
 
 private val WHISPER_LANGUAGES = listOf(
@@ -51,6 +53,8 @@ private val WHISPER_LANGUAGES = listOf(
 @Composable
 fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    var showBackendWarning by remember { mutableStateOf<String?>(null) }
+    var npuModelWarning by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         modifier = modifier,
@@ -82,12 +86,28 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
             }
 
             SectionCard("Compute backend") {
+                val backends = remember { vm.backends }
+                val npuPresent = backends.any { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
+                val selectedModel = remember(settings.modelId) { vm.selectedModel() }
+
                 RadioRow("Auto — NPU/GPU when available, else CPU", settings.backendPref == "auto") { vm.setBackendPref("auto") }
-                RadioRow("QNN — Whisper Turbo fp16 on NPU (needs model files)", settings.backendPref == "qnn") { vm.setBackendPref("qnn") }
-                RadioRow("NPU — Hexagon ggml (experimental, Snapdragon 8 Gen 2+)", settings.backendPref == "npu") { vm.setBackendPref("npu") }
+                RadioRow("QNN — Whisper Turbo fp16 on NPU (needs model files)", settings.backendPref == "qnn") {
+                    if (npuPresent) vm.setBackendPref("qnn") else showBackendWarning = "qnn"
+                }
+                RadioRow("NPU — Hexagon ggml (experimental, Snapdragon 8 Gen 2+)", settings.backendPref == "npu") {
+                    when {
+                        !npuPresent -> showBackendWarning = "npu"
+                        !selectedModel.id.endsWith("-q8_0") && !selectedModel.id.startsWith("qnn-turbo") ->
+                            npuModelWarning = selectedModel.label
+                        else -> vm.setBackendPref("npu")
+                    }
+                }
                 RadioRow("GPU — OpenCL (Adreno) / Vulkan", settings.backendPref == "gpu") { vm.setBackendPref("gpu") }
                 RadioRow("CPU", settings.backendPref == "cpu") { vm.setBackendPref("cpu") }
-                HelperText("QNN uses Qualcomm AI Hub context binaries (~2.2GB, files/qnn). NPU requires a Hexagon-capable Snapdragon and a q8_0 model; both fall back automatically if unavailable.")
+                HelperText(
+                    "QNN uses Qualcomm AI Hub context binaries (~2.2GB, files/qnn). NPU requires a " +
+                        "Hexagon-capable Snapdragon and a q8_0 model; both fall back automatically if unavailable.",
+                )
             }
 
             SectionCard("Language") {
@@ -141,6 +161,52 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
                 }
             }
         }
+    }
+
+    // backend guards: don't let the user pick an engine the device can't run,
+    // and warn when the current model can't run on the chosen engine
+    if (showBackendWarning != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showBackendWarning = null },
+            title = { Text("No Qualcomm NPU") },
+            text = {
+                Text(
+                    "This device doesn't expose a Hexagon NPU, so the " +
+                        (if (showBackendWarning == "qnn") "QNN" else "NPU") +
+                        " backend can't run here. Transcription would fall back to CPU anyway — " +
+                        "keep Auto or pick CPU/GPU.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showBackendWarning = null }) { Text("OK") }
+            },
+        )
+    }
+    if (npuModelWarning != null) {
+        val recommended = ModelCatalog.recommendedFor(vm.effectiveTier.value)
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { npuModelWarning = null },
+            title = { Text("Model can't use the NPU") },
+            text = {
+                Text(
+                    "“$npuModelWarning” isn't a q8_0 model, and the NPU only runs q8_0 — it would " +
+                        "silently fall back to CPU. Switch the model instead?",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.selectModel(recommended.id)
+                    vm.setBackendPref("npu")
+                    npuModelWarning = null
+                }) { Text("Use ${recommended.label}") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    vm.setBackendPref("npu")
+                    npuModelWarning = null
+                }) { Text("Keep model (CPU fallback)") }
+            },
+        )
     }
 }
 

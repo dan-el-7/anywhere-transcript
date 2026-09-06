@@ -83,9 +83,14 @@ Debug builds contain `arm64-v8a` + `x86_64` (emulator testing); release builds a
 
 ### Using the NPU on a Qualcomm phone (user guide)
 
-Both engines work on Snapdragon **8 Gen 1 through 8 Elite Gen 5**. First launch
-shows a picker that already highlights the best option for your chip; afterwards
-everything lives in *Models* and *Settings → Compute backend*.
+**Maturity: the QNN engine is the one that works well** — it's what the app
+steers you to. CPU always works. The other two paths are usable but iffy:
+NPU-ggml (engine 1) is experimental and driver-dependent, and OpenCL GPU is
+opt-in for the same reason.
+
+Both NPU engines work on Snapdragon **8 Gen 1 through 8 Elite Gen 5**. First
+launch shows a picker that already highlights the best option for your chip;
+afterwards everything lives in *Models* and *Settings → Compute backend*.
 
 1. **Models tab** — find the entry marked *"✓ Your chip"*:
    - **Whisper Turbo · NPU (v79)** etc. — Large-V3-Turbo fp16 as QNN context
@@ -103,9 +108,8 @@ everything lives in *Models* and *Settings → Compute backend*.
 The first transcription opens the QNN sessions (~10–20 s); after that each run
 is instant to start. Everything is offline.
 
-### Engine 1 — Hexagon ggml
-
-whisper.cpp with the `ggml-hexagon` backend runs regular GGML models (q8_0)
+**Engine 1 — Hexagon ggml (experimental, iffy):** whisper.cpp with the
+`ggml-hexagon` backend runs regular GGML models (q8_0)
 directly on the NPU. The arm64 build ships `libwhisperjni.so` with the backend
 compiled in, plus per-SoC DSP kernel drivers (`libggml-htp-v73/v75/v79/v81.so`
 — Snapdragon 8 Gen 2 → 8 Elite Gen 5), built with the Hexagon SDK 6.6.0.0 from
@@ -123,7 +127,7 @@ Three non-obvious fixes were required to make it work — all in the app:
 3. The backend device is named **HTP** — backend detection must not filter on
    "Hexagon".
 
-### Engine 2 — QNN runtime (working)
+### Engine 2 — QNN runtime (works well)
 
 Whisper Large-V3-Turbo fp16 as **Qualcomm AI Hub context binaries**, executed
 through ONNX Runtime's QNN Execution Provider (`onnxruntime-android-qnn` +

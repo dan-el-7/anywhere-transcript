@@ -419,6 +419,13 @@ private fun ModelRow(
                     else -> "For ${model.socLabel}"
                 }
                 AssistChip(onClick = {}, label = { Text(chipText) })
+                if (myArch != null && model.qnnArch != myArch) {
+                    Text(
+                        "⚠ Built for a different Hexagon version — this package won't run on this device's NPU.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             } else if (model.note != null && status != ModelStatus.DOWNLOADING) {
                 AssistChip(onClick = {}, label = { Text(model.note) })
             }

@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,15 @@ fun OnboardingScreen(vm: AppViewModel) {
 
     val options = remember(tier) { ModelCatalog.onboardingOptions(tier, arch) }
     var selectedId by remember(tier) { mutableStateOf(options.firstOrNull()?.id) }
+
+    // "pick the ideal model and it downloads": the recommended option starts
+    // downloading on its own; other cards download via their own button
+    val autoStarted = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    LaunchedEffect(tier) {
+        options.firstOrNull()?.let { first ->
+            if (autoStarted.add(first.id)) vm.download(first)
+        }
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Welcome") }) },
@@ -138,19 +148,24 @@ fun OnboardingScreen(vm: AppViewModel) {
 
             item(key = "actions") {
                 val sel = selectedId?.let { ModelCatalog.byId[it] }
-                val selStatus = sel?.let { states[it.id]?.status ?: ModelStatus.NOT_DOWNLOADED }
+                val selState = sel?.let { states[it.id] }
+                val selStatus = selState?.status ?: ModelStatus.NOT_DOWNLOADED
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { vm.finishOnboarding(sel?.id) },
-                        enabled = sel == null || selStatus == ModelStatus.DOWNLOADED,
+                        enabled = sel != null && selStatus == ModelStatus.DOWNLOADED,
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         shape = MaterialTheme.shapes.extraLarge,
                     ) {
                         Text(
                             when {
-                                sel == null -> "Start"
-                                selStatus == ModelStatus.DOWNLOADED -> "Start transcribing"
-                                else -> "Download to continue"
+                                selStatus == ModelStatus.DOWNLOADING && selState != null && selState.totalBytes > 0 -> {
+                                    val pct = (selState.downloadedBytes * 100 / selState.totalBytes).toInt()
+                                    "Downloading… $pct%"
+                                }
+                                selStatus == ModelStatus.DOWNLOADING -> "Downloading…"
+                                selStatus == ModelStatus.FAILED -> "Download failed — retry on the card above"
+                                else -> "Start transcribing"
                             },
                             style = MaterialTheme.typography.titleMedium,
                         )
@@ -228,11 +243,14 @@ private fun OptionCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                ModelStatus.FAILED -> Text(
-                    "Download failed${state?.error?.let { ": $it" } ?: ""}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                ModelStatus.FAILED -> {
+                    Text(
+                        "Download failed${state?.error?.let { ": $it" } ?: ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = onDownload) { Text("Retry download") }
+                }
                 ModelStatus.NOT_DOWNLOADED -> if (selected || recommended) {
                     TextButton(onClick = onDownload) { Text("Download now") }
                 }
