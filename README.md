@@ -14,7 +14,7 @@ it runs Whisper Turbo on the **Hexagon NPU** through Qualcomm's QNN runtime at
 ## Why another transcription app?
 
 Everything else either uploads your voice to a server or runs a toy model.
-This app runs the *real* Whisper — up to Large-V3-Turbo — with the same
+This app runs the *real* Whisper (also most others lack NPU support) — up to Large-V3-Turbo — with the same
 privacy as a notes app: audio never leaves the device, and the entire pipeline
 (engine, models, UI) works in airplane mode.
 
