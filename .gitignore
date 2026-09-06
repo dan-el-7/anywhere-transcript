@@ -8,7 +8,8 @@ app/.cxx/
 .cxx/
 local.properties
 whisper-src/
-whisper-jni/third_party/OpenCL-Headers/
+whisper-jni/third_party/OpenCL-Headers/*
+!whisper-jni/third_party/OpenCL-Headers/CL/
 whisper-jni/third_party/OpenCL-ICD-Loader/
 local-dream-master/
 .tmp/
