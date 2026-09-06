@@ -269,14 +269,17 @@ class TranscriptionCoordinator(
         val gpus = WhisperEngine.gpuBackends()
         val npu = gpus.firstOrNull { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
         val gpu = gpus.firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
-            ?: gpus.firstOrNull()
         // The Hexagon path supports q8_0/f32 quants; the default recommendations are q8_0.
         val npuUsable = npu != null && model.id.endsWith("-q8_0")
         return when (pref) {
             "npu" -> npu ?: gpu ?: cpuDevice()
+            "qnn" -> npu ?: gpu ?: cpuDevice()
+            "gpu" -> (gpu ?: npu ?: cpuDevice()).also {
+                // GPU is an explicit opt-in: OpenCL aborts on some OEM drivers
+                WhisperEngine.setOpenclEnabled(gpu != null && !it.name.startsWith("HTP"))
+            }
             "cpu" -> cpuDevice()
-            "gpu" -> gpu ?: cpuDevice()
-            else -> if (npuUsable) npu!! else gpu ?: cpuDevice() // auto: NPU → GPU → CPU
+            else -> if (npuUsable) npu!! else cpuDevice() // auto: NPU → CPU (OpenCL is opt-in)
         }
     }
 

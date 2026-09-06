@@ -17,6 +17,10 @@
 
 static JavaVM *g_jvm = nullptr;
 
+// OpenCL is opt-in (see opencl_shim.c): some OEM Adreno drivers abort inside
+// ggml's CL_CHECK paths, which Java cannot catch.
+extern "C" void opencl_shim_set_enabled(int enabled);
+
 // Route whisper/ggml (and backend: OpenCL/Hexagon) logs into logcat so
 // backend registration and DSP session issues are visible on device.
 static void jni_ggml_log(enum ggml_log_level level, const char *text, void * /*user_data*/) {
@@ -71,12 +75,20 @@ Java_com_anywhere_transcript_engine_WhisperEngine_systemInfo(JNIEnv *env, jobjec
     return env->NewStringUTF(whisper_print_system_info());
 }
 
+// OpenCL is opt-in (see opencl_shim.c): some OEM Adreno drivers abort inside
+// ggml's CL_CHECK paths, which Java cannot catch.
+
+JNIEXPORT void JNICALL
+Java_com_anywhere_transcript_engine_WhisperEngine_setOpenclEnabled(JNIEnv *, jobject, jboolean enabled) {
+    opencl_shim_set_enabled(enabled == JNI_TRUE ? 1 : 0);
+    LOGI("OpenCL %s", enabled == JNI_TRUE ? "enabled" : "disabled");
+}
+
 // The FastRPC DSP loader searches ADSP_LIBRARY_PATH for the skel library
 // (libggml-htp-vXX.so). Apps must point it at their own extracted lib dir —
 // the DSP-side default paths (/vendor/dsp/cdsp etc.) are not app-writable.
 JNIEXPORT void JNICALL
-Java_com_anywhere_transcript_engine_WhisperEngine_setDspLibraryPath(JNIEnv *env, jobject, jstring dir) {
-    const char *d = env->GetStringUTFChars(dir, nullptr);
+Java_com_anywhere_transcript_engine_WhisperEngine_setDspLibraryPath(JNIEnv *env, jobject, jstring dir) {    const char *d = env->GetStringUTFChars(dir, nullptr);
     if (!d) return;
     std::string paths = std::string(d)
         + ";/vendor/dsp/cdsp;/system/lib/rfsa/adsp;/vendor/lib/rfsa/adsp;/system/lib64";

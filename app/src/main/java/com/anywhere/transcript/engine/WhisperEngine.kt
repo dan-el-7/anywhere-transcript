@@ -41,6 +41,12 @@ object WhisperEngine {
      */
     external fun setDspLibraryPath(path: String)
 
+    /**
+     * OpenCL is opt-in: some OEM Adreno drivers abort inside ggml's CL_CHECK
+     * paths (uncatchable). Enabled only when the user explicitly selects GPU.
+     */
+    external fun setOpenclEnabled(enabled: Boolean)
+
     /** Compiled backend devices, each "name;description;cpu|gpu|accel". */
     external fun listBackends(): Array<String>
 

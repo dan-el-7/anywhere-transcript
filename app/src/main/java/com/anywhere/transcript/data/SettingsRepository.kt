@@ -53,7 +53,15 @@ class SettingsRepository(private val context: Context) {
     suspend fun current(): AppSettings = settings.first()
 
     suspend fun setTierOverride(v: String) = context.dataStore.edit { it[Keys.TIER] = v }
-    suspend fun setBackendPref(v: String) = context.dataStore.edit { it[Keys.BACKEND] = v }
+    suspend fun setBackendPref(v: String) {
+        context.dataStore.edit { it[Keys.BACKEND] = v }
+        // synchronous side-channel: the OpenCL opt-in flag must be readable
+        // before DataStore's first read (JNI needs it at process start)
+        context.getSharedPreferences("engine_flags", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("opencl_enabled", v == "gpu")
+            .apply()
+    }
     suspend fun setModelId(v: String?) = context.dataStore.edit {
         if (v == null) it.remove(Keys.MODEL) else it[Keys.MODEL] = v
     }

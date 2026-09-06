@@ -31,6 +31,11 @@ class TranscriberApp : Application() {
         runCatching {
             WhisperEngine.setDspLibraryPath(applicationInfo.nativeLibraryDir)
         }
+        // OpenCL is opt-in (crash-safe default off); kept in sync by SettingsRepository
+        runCatching {
+            val flags = getSharedPreferences("engine_flags", MODE_PRIVATE)
+            WhisperEngine.setOpenclEnabled(flags.getBoolean("opencl_enabled", false))
+        }
     }
 
     private fun createNotificationChannel() {

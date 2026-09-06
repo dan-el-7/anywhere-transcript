@@ -110,6 +110,7 @@ static const char *const kOpenLibCandidates[] = {{
 
 static void *g_opencl_lib = NULL;
 static int g_load_attempted = 0;
+static int g_enabled = 0;
 
 /* Trampoline targets: external linkage + hidden visibility + used, because
  * they are referenced only from inline asm and addressed PC-relative. */
@@ -135,7 +136,16 @@ static void opencl_shim_load(void) {
 '''
 
 FOOTER = '''
+/* Opt-in switch: the Adreno OpenCL driver aborts (ggml CL_CHECK) on some OEM
+ * builds, which is uncatchable from Java. OpenCL stays disabled until the app
+ * explicitly enables it. */
+void opencl_shim_set_enabled(int enabled) {
+    g_enabled = enabled;
+    if (!enabled) g_load_attempted = 0;
+}
+
 static int opencl_shim_ensure(void) {
+    if (!g_enabled) return 0;
     if (!g_load_attempted) {
         g_load_attempted = 1;
         opencl_shim_load();
