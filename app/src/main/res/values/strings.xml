@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Anywhere Transcript</string>
+    <string name="notif_channel_name">Transcription</string>
+    <string name="notif_channel_desc">Progress of on-device audio transcription</string>
+    <string name="notif_title">Transcribing</string>
+    <string name="notif_cancel">Cancel</string>
+</resources>
