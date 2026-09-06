@@ -114,13 +114,12 @@ class ModelRepository(
 
     fun downloadedModels(): List<ModelInfo> = ModelCatalog.all.filter { isDownloaded(it.id) }
 
-    /** The model to use: manual selection if downloaded, otherwise the tier recommendation. */
-    fun selectedOrDefault(settings: AppSettings, tier: DeviceTier): ModelInfo {
-        settings.modelId?.let { id ->
-            ModelCatalog.byId[id]?.let { if (isDownloaded(it.id)) return it }
-        }
-        return ModelCatalog.recommendedFor(tier)
-    }
+    /**
+     * The model to use (see [ModelCatalog.selectModel]); null when no ggml
+     * model is usable at all.
+     */
+    fun selectedOrDefault(settings: AppSettings, tier: DeviceTier): ModelInfo? =
+        ModelCatalog.selectModel(settings, tier) { id -> isDownloaded(id) }
 
     fun download(model: ModelInfo) {
         if (jobs.containsKey(model.id) || isDownloaded(model.id)) return

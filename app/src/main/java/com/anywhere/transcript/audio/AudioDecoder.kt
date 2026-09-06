@@ -43,6 +43,8 @@ class AudioDecoder(private val context: Context) {
 
     private var converter: RateConverter? = null
     private var out16k = FloatArray(0)
+    /** Logical size of [out16k] (the array may be over-allocated). */
+    private var outLen = 0
 
     fun open(uri: Uri): Opened {
         reset()
@@ -137,7 +139,7 @@ class AudioDecoder(private val context: Context) {
         val need = windowSec * 16000
         val conv = converter ?: RateConverter(sourceRate, 16000).also { converter = it }
 
-        while (out16k.size < need && !eosReached()) {
+        while (outLen < need && !eosReached()) {
             if (isCancelled()) break
             decodeStep()
             if (eosReached() && !flushed) {
@@ -145,11 +147,17 @@ class AudioDecoder(private val context: Context) {
                 append16k(conv.flush())
             }
         }
-        if (isCancelled() && out16k.size < need) return null
-        val take = minOf(need, out16k.size)
+        if (isCancelled() && outLen < need) return null
+        val take = minOf(need, outLen)
         if (take == 0) return null
         val window = out16k.copyOf(take)
-        out16k = if (take == out16k.size) FloatArray(0) else out16k.copyOfRange(take, out16k.size)
+        if (take == outLen) {
+            outLen = 0
+        } else {
+            // shift the remainder to the front; capacity stays for reuse
+            System.arraycopy(out16k, take, out16k, 0, outLen - take)
+            outLen -= take
+        }
         return window
     }
 
@@ -172,6 +180,7 @@ class AudioDecoder(private val context: Context) {
         wavStream = null
         wavHeader = null
         out16k = FloatArray(0)
+        outLen = 0
         converter = null
     }
 
@@ -181,10 +190,22 @@ class AudioDecoder(private val context: Context) {
 
     private fun append16k(samples: FloatArray) {
         if (samples.isEmpty()) return
-        val merged = FloatArray(out16k.size + samples.size)
-        System.arraycopy(out16k, 0, merged, 0, out16k.size)
-        System.arraycopy(samples, 0, merged, out16k.size, samples.size)
-        out16k = merged
+        // Amortized growth: doubling instead of copy-on-every-append keeps
+        // long-window accumulation linear. The old per-chunk copyOf was O(n²)
+        // in total bytes moved (~GBs of memcpy per long file).
+        val old = out16k
+        if (old.size >= outLen + samples.size) {
+            System.arraycopy(samples, 0, old, outLen, samples.size)
+            outLen += samples.size
+        } else {
+            var cap = maxOf(old.size, 64)
+            while (cap < outLen + samples.size) cap *= 2
+            val grown = FloatArray(cap)
+            System.arraycopy(old, 0, grown, 0, outLen)
+            System.arraycopy(samples, 0, grown, outLen, samples.size)
+            out16k = grown
+            outLen += samples.size
+        }
     }
 
     private fun reset() {

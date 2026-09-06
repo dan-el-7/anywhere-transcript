@@ -102,8 +102,9 @@ afterwards everything lives in *Models* and *Settings → Compute backend*.
      NPU through whisper.cpp's Hexagon backend, or on CPU anywhere.
 2. **Settings → Compute backend**: pick **QNN** for the Turbo package (the app
    also routes automatically: a qnn-* model always runs on the QNN engine), or
-   **NPU** for q8_0 models on the ggml engine. *Auto* picks the NPU whenever a
-   compatible model is selected.
+   **NPU** for q8_0 models on the ggml engine. *Auto* never dispatches raw HTP —
+   it uses GPU when available, else CPU (the NPU is reached via QNN); if the
+   chosen backend fails at init, the job **retries on CPU automatically**.
 3. Share any audio file from any app, or pick one in the Transcribe tab.
 
 The first transcription opens the QNN sessions (~10–20 s); after that each run

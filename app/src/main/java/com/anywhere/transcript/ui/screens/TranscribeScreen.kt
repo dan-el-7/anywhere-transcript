@@ -117,6 +117,7 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
     )
 
     val backendLabel = when {
+        selected == null -> "No model yet — download one in the Models tab"
         // QNN packages only run on the QNN engine, whatever the preference says
         selected.id.startsWith("qnn-turbo") -> when {
             npu == null -> "QNN unavailable on this device → pick a ggml model"
@@ -149,9 +150,9 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Ready to transcribe", style = MaterialTheme.typography.titleLarge)
             SetupRow("Device tier", tier.label)
-            SetupRow("Model", "${selected.label} · ${Format.bytes(selected.sizeBytes)}")
+            SetupRow("Model", selected?.let { "${it.label} · ${Format.bytes(it.sizeBytes)}" } ?: "None — pick one in Models")
             SetupRow("Engine", backendLabel)
-            if (!backendLabel.contains("NPU") && !backendLabel.contains("GPU") && selected.sizeBytes > 400L * 1024 * 1024) {
+            if (selected != null && !backendLabel.contains("NPU") && !backendLabel.contains("GPU") && selected.sizeBytes > 400L * 1024 * 1024) {
                 Text(
                     "Running a large model on CPU is slow. For everyday clips, small-q8_0 (Models tab) is several times faster with slightly lower accuracy.",
                     style = MaterialTheme.typography.bodySmall,

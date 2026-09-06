@@ -59,10 +59,11 @@ class TranscriptionCoordinator(
             // selected qnn-* model routes there under every backend preference.
             var model: ModelInfo? = modelRepo.selectedOrDefault(s, tier)
             val useQnn = backendOverride == "qnn" || model?.id?.startsWith("qnn-turbo") == true
-
             var modelLabel: String
             var modelId: String
             var qnnArch = ""
+            // Whisper-engine model path; stays null on the QNN path.
+            var modelPath: String? = null
             if (useQnn) {
                 qnnArch = model?.id?.removePrefix("qnn-turbo-")?.takeIf { it != model?.id }
                     ?: (com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79")
@@ -82,7 +83,21 @@ class TranscriptionCoordinator(
                     ?: "Large-V3-Turbo QNN ($qnnArch)"
                 model = null
             } else {
-                val m = model ?: return
+                // No usable ggml model: fail loudly (with a path to the Models
+                // tab) instead of silently doing nothing — the old `?: return`
+                // left the UI stuck in IDLE with a foreground service hanging.
+                val m = model ?: run {
+                    bus.update {
+                        it.copy(
+                            phase = JobPhase.ERROR,
+                            fileName = displayName,
+                            error = "No usable model. Download one from the Models tab first" +
+                                " (or the QNN Turbo package for this chip).",
+                            modelMissing = true,
+                        )
+                    }
+                    return
+                }
                 if (!modelRepo.isDownloaded(m.id)) {
                     bus.update {
                         it.copy(
@@ -96,9 +111,11 @@ class TranscriptionCoordinator(
                 }
                 modelId = m.id
                 modelLabel = m.label
+                modelPath = modelRepo.modelFile(m.id).absolutePath
+                model = m
             }
 
-            val backend = if (useQnn) null else pickBackend(s.backendPref, model!!)
+            var backend = if (useQnn) null else pickBackend(s.backendPref, model!!)
             bus.update {
                 it.copy(
                     phase = JobPhase.PREPARING,
@@ -110,20 +127,33 @@ class TranscriptionCoordinator(
             }
             Log.i(TAG, "job start: model=$modelId backend=${backend?.name ?: "QNN"} pref=${s.backendPref} tier=$tier")
 
-            val ctx = if (useQnn) 0L else run {
-                val c = WhisperEngine.createContext(
-                    modelRepo.modelFile(model!!.id).absolutePath,
+            var ctx = 0L
+            if (!useQnn) {
+                ctx = WhisperEngine.createContext(
+                    modelPath!!,
                     backend!!.name,
                     WhisperEngine.defaultThreads(),
                 )
-                if (c == 0L) {
+                if (ctx == 0L && backend.name != cpuDevice().name) {
+                    // Backend init can fail at runtime (OEM-gated DSP sessions,
+                    // flaky GPU drivers): retry on CPU instead of killing the
+                    // job — the README promises automatic CPU fallback.
+                    Log.w(TAG, "context init failed on ${backend.name}, retrying on CPU")
+                    backend = cpuDevice()
+                    ctx = WhisperEngine.createContext(
+                        modelPath!!,
+                        backend.name,
+                        WhisperEngine.defaultThreads(),
+                    )
+                    if (ctx != 0L) bus.update { it.copy(backend = backend.name) }
+                }
+                if (ctx == 0L) {
                     bus.update {
                         it.copy(phase = JobPhase.ERROR, error = "Could not load model “$modelLabel”.")
                     }
+                    return
                 }
-                c
             }
-            if (!useQnn && ctx == 0L) return
             if (useQnn && !QnnWhisperEngine.initIfNeeded(context, qnnArch)) {
                 bus.update {
                     it.copy(phase = JobPhase.ERROR, error = "QNN init failed — see logcat (tag QnnWhisper).")
@@ -286,17 +316,18 @@ class TranscriptionCoordinator(
         val gpus = WhisperEngine.gpuBackends()
         val npu = gpus.firstOrNull { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
         val gpu = gpus.firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
-        // The Hexagon path supports q8_0/f32 quants; the default recommendations are q8_0.
-        val npuUsable = npu != null && model.id.endsWith("-q8_0")
+        // Direct Hexagon dispatch is opt-in ONLY (Settings → NPU): HTP sessions
+        // are OEM-gated and usually fail at init from an app UID. Auto/GPU picks
+        // never attempt it — the NPU is reached via the QNN engine instead.
         return when (pref) {
-            "npu" -> npu ?: gpu ?: cpuDevice()
-            "qnn" -> npu ?: gpu ?: cpuDevice()
+            "npu", "qnn" -> npu ?: gpu ?: cpuDevice()
             "gpu" -> (gpu ?: npu ?: cpuDevice()).also {
                 // GPU is an explicit opt-in: OpenCL aborts on some OEM drivers
                 WhisperEngine.setOpenclEnabled(gpu != null && !it.name.startsWith("HTP"))
             }
             "cpu" -> cpuDevice()
-            else -> if (npuUsable) npu!! else cpuDevice() // auto: NPU → CPU (OpenCL is opt-in)
+            // auto: GPU if present, else CPU (OpenCL opt-in only; never raw HTP)
+            else -> gpu ?: cpuDevice()
         }
     }
 

@@ -71,9 +71,25 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
   read mapping + setter. Expose via `AppViewModel` setter, UI in
   `SettingsScreen`. DataStore **persists across `install -r`** — testing a
   "default" requires fresh install or clearing app data (which wipes models).
-- Current prefs: tierOverride, backendPref (auto/qnn/npu/gpu/cpu),
-  modelId, language, translateToEnglish, dynamicColor, themeMode,
+- Current prefs: tierOverride, backendPref (auto/qnn/npu/gpu/cpu), modelId,
+  language, translateToEnglish, dynamicColor, themeMode,
   onboardingDone, hideIncompatibleModels (default true).
+- Model selection (`ModelCatalog.selectModel`, mirrored by
+  `ModelRepository.selectedOrDefault` — nullable): manual pick if downloaded →
+  tier recommendation if downloaded → ANY downloaded ggml model. Null = no
+  ggml model at all → coordinator/viewmodel must surface an ERROR
+  (modelMissing=true), never silently return (that stranded the FGS in IDLE).
+  QNN packages are never a whisper.cpp fallback.
+
+## Transcription pipeline invariants
+
+- `AudioDecoder` accumulator (`out16k`) grows amortized-doubling with a
+  separate `outLen` logical length — do NOT revert to per-chunk copyOf
+  (that was O(n²) memcpy; decode of long files crawled).
+- Backend init failure (createContext == 0) retries on CPU once before
+  erroring; the bus's `backend` field is updated so the UI shows what ran.
+- Auto backend pref never dispatches raw HTP (GPU or CPU only); direct NPU
+  is the explicit Settings radio only.
 
 ## Models screen rules
 

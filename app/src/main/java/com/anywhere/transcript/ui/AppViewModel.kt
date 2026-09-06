@@ -88,12 +88,15 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
     fun requestTranscribe(uri: Uri, displayName: String, backendOverride: String? = null) {
         val model = graph.modelRepo.selectedOrDefault(settings.value, effectiveTier.value)
         val usesWhisper = backendOverride == null || backendOverride == "auto"
-        if (usesWhisper && !graph.modelRepo.isDownloaded(model.id)) {
+        if (usesWhisper && model == null) {
+            // Nothing usable on the whisper.cpp engine: fail visibly instead of
+            // starting a service that would sit stuck in IDLE forever.
             TranscriptionBus.update {
                 it.copy(
                     phase = com.anywhere.transcript.transcription.JobPhase.ERROR,
                     fileName = displayName,
-                    error = "Model “${model.label}” isn't downloaded yet. Get it from the Models tab.",
+                    error = "No usable model. Download one from the Models tab first" +
+                        " (or the QNN Turbo package for this chip).",
                     modelMissing = true,
                 )
             }
@@ -129,7 +132,7 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
         viewModelScope.launch { graph.settingsRepo.setModelId(modelId) }
     }
 
-    fun selectedModel(): ModelInfo =
+    fun selectedModel(): ModelInfo? =
         graph.modelRepo.selectedOrDefault(settings.value, effectiveTier.value)
 
     // ---- custom models -----------------------------------------------------------

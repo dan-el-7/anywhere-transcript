@@ -122,4 +122,40 @@ class ModelCatalogTest {
         val noNpu = ModelCatalog.onboardingOptions(DeviceTier.MID, null)
         assertEquals(ModelCatalog.recommendedFor(DeviceTier.MID).id, noNpu.first().id)
     }
+
+    @Test
+    fun `selectModel prefers a downloaded manual selection`() {
+        val s = AppSettings(modelId = "small-q8_0")
+        val picked = ModelCatalog.selectModel(s, DeviceTier.MID) { it == "small-q8_0" || it == "base-q8_0" }
+        assertEquals("small-q8_0", picked?.id)
+    }
+
+    @Test
+    fun `selectModel ignores a manual selection that is not downloaded`() {
+        val s = AppSettings(modelId = "large-v3-turbo-q8_0")
+        val picked = ModelCatalog.selectModel(s, DeviceTier.MID) { it == "small-q8_0" }
+        // falls back to the tier recommendation, NOT the undownloaded pick
+        assertEquals("small-q8_0", picked?.id)
+    }
+
+    @Test
+    fun `selectModel falls back to any downloaded ggml model when recommendation is missing`() {
+        val s = AppSettings(modelId = null)
+        val picked = ModelCatalog.selectModel(s, DeviceTier.MID) { it == "tiny.en-q8_0" }
+        assertEquals("tiny.en-q8_0", picked?.id)
+    }
+
+    @Test
+    fun `selectModel never falls back to a QNN package`() {
+        val s = AppSettings(modelId = null)
+        val picked = ModelCatalog.selectModel(s, DeviceTier.FLAGSHIP) { ModelCatalog.isQnnPackage(it) }
+        assertEquals(null, picked)
+    }
+
+    @Test
+    fun `selectModel returns null when nothing is downloaded`() {
+        val s = AppSettings(modelId = "small-q8_0")
+        val picked = ModelCatalog.selectModel(s, DeviceTier.MID) { false }
+        assertEquals(null, picked)
+    }
 }

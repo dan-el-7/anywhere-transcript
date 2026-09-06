@@ -97,6 +97,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
                 RadioRow("NPU — direct Hexagon (rarely works from apps, prefer QNN)", settings.backendPref == "npu") {
                     when {
                         !npuPresent -> showBackendWarning = "npu"
+                        selectedModel == null ->
+                            npuModelWarning = "no model selected"
                         !selectedModel.id.endsWith("-q8_0") && !selectedModel.id.startsWith("qnn-turbo") ->
                             npuModelWarning = selectedModel.label
                         else -> vm.setBackendPref("npu")

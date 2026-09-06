@@ -114,6 +114,20 @@ object ModelCatalog {
     /** Detects a QNN context-binary package entry (zip, extracted for the NPU engine). */
     fun isQnnPackage(modelId: String): Boolean = modelId.startsWith("qnn-turbo")
 
+    /**
+     * The model to use, in order: manual selection if downloaded → tier
+     * recommendation if downloaded → any downloaded ggml model. Null only when
+     * no ggml model is usable at all (QNN packages never run on the whisper.cpp
+     * engine, so they don't count as a fallback here).
+     */
+    fun selectModel(settings: AppSettings, tier: DeviceTier, isDownloaded: (String) -> Boolean): ModelInfo? {
+        settings.modelId?.let { id ->
+            byId[id]?.let { if (isDownloaded(it.id)) return it }
+        }
+        recommendedFor(tier).let { if (isDownloaded(it.id)) return it }
+        return all.firstOrNull { !isQnnPackage(it.id) && isDownloaded(it.id) }
+    }
+
     fun recommendedFor(tier: DeviceTier): ModelInfo = byId.getValue(recommended.getValue(tier))
 
     fun forTier(tier: DeviceTier): List<ModelInfo> = all.filter { it.tier == tier }
