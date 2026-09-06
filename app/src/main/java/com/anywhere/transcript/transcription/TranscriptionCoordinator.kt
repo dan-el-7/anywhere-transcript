@@ -201,7 +201,8 @@ class TranscriptionCoordinator(
                         val windowText = QnnWhisperEngine.transcribeWindow(
                             context,
                             window,
-                            s.language.ifBlank { "en" },
+                            s.language.ifBlank { "auto" },
+                            translate = s.translateToEnglish,
                             onPartialText = { delta ->
                                 streamed += delta
                                 bus.update { it.copy(partialText = streamed.trim()) }

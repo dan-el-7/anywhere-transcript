@@ -27,7 +27,12 @@ object QnnWhisperEngine {
     // transcribe/notimestamps ids DIFFER from the v2 (small) ones.
     private const val SOT = 50258
     private const val TRANSCRIBE = 50360
+    private const val TRANSLATE = 50359
     private const val NOTIMESTAMPS = 50364
+
+    // Sentinel: prompt[1] = LANG_AUTO makes the native decoder argmax the
+    // language-token logits at the SOT step and substitute the detected id.
+    private const val LANG_AUTO = -1
 
     // Whisper language-token order; id = LANG_FIRST + index (matches the
     // native side's LANG_FIRST/LANG_EN/LANG_PT).
@@ -153,21 +158,26 @@ object QnnWhisperEngine {
     }
 
     private fun langToken(languageIso: String): Int {
-        val key = languageIso.ifBlank { "en" }.lowercase()
-        // "auto" maps to English (fixed-prompt decode loop; auto-detect is v2.1)
+        val key = languageIso.ifBlank { "auto" }.lowercase()
+        // "auto" → LANG_AUTO sentinel: native decodes the language-token argmax
+        // at the SOT step and substitutes it, so output follows the spoken
+        // language instead of always conditioning on <|en|> (= silent EN
+        // translation of foreign speech).
         val idx = LANG_ORDER.indexOf(key).let { if (it >= 0) it else 0 }
-        return LANG_FIRST + idx
+        return if (key == "auto") LANG_AUTO else LANG_FIRST + idx
     }
 
     /**
-     * Transcribes one ≤30s window of 16kHz mono PCM. Language "auto" maps to
-     * English (turbo's decode loop uses a fixed prompt; auto-detect lands in v2.1).
+     * Transcribes one ≤30s window of 16kHz mono PCM. Language "auto" triggers
+     * native language detection (output follows the spoken language).
+     * [translate] = true swaps the task token to TRANSLATE → English output.
      * [onPartialText] receives streaming text as tokens are decoded.
      */
     fun transcribeWindow(
         context: Context,
         pcm: FloatArray,
         languageIso: String,
+        translate: Boolean = false,
         onPartialText: (String) -> Unit = {},
         isCancelled: () -> Boolean = { false },
     ): String {
@@ -189,8 +199,16 @@ object QnnWhisperEngine {
         val mel = HtpWhisper.nativeMel(padded, fp16Out = true)
             ?: run { Log.e(TAG, "mel failed"); return "" }
 
-        val langId = langToken(languageIso)
-        val prompt = intArrayOf(SOT, langId, TRANSCRIBE, NOTIMESTAMPS)
+        val langId = if (translate) LANG_FIRST else langToken(languageIso)
+        // Empirically (see probe logs 09-07): this AI Hub export ignores the
+        // task-token slot — every task id 50357..50361 yields identical output.
+        // Output language is driven by the LANGUAGE token instead: pre-fix runs
+        // with <|en|> conditioning translated foreign speech to English even on
+        // the transcribe task. So translate=true forces <|en|> + <|translate|>
+        // (kept for prompt-shape fidelity with whisper.cpp).
+        val task = if (translate) TRANSLATE else TRANSCRIBE
+        val prompt = intArrayOf(SOT, langId, task, NOTIMESTAMPS)
+        Log.i(TAG, "qnn prompt=${prompt.contentToString()} translate=$translate")
 
         val metrics = FloatArray(4)
         val tokens = HtpWhisper.nativeTranscribe(handle, mel, prompt, metrics)

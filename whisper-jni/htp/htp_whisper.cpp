@@ -366,6 +366,17 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
     float noSpeechProb = 0.0f;
     float ptProb = 0.0f;  // P(<|pt|>) among the language tokens at the SOT step
     float enProb = 0.0f;  // P(<|en|>) — silence hallucinations read as English
+    int32_t detectedLang = -1;  // argmax over language tokens when auto
+
+    // Language auto-detect: the caller passes -1 as prompt[1]. The decoder
+    // logits at the SOT step already hold the language distribution (same
+    // signal whisper.cpp uses), so we feed SOT first, read the argmax over
+    // LANG_FIRST..LANG_FIRST+langCount, and substitute it into the prompt
+    // before the language token is consumed. Detect costs one decode step.
+    const bool langAuto = prompt.size() >= 2 && prompt[1] == -1;
+    if (langAuto) {
+        prompt[1] = LANG_EN;  // provisional; replaced by the detected id
+    }
 
     if (ok) {
         clock_gettime(CLOCK_MONOTONIC, &ts0);
@@ -403,6 +414,16 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
                         langDenom += exp((double)(fromFp16(logits[i]) - mx));
                     langPt = exp((double)(fromFp16(logits[LANG_PT]) - mx));
                     langEn = exp((double)(fromFp16(logits[LANG_EN]) - mx));
+                    if (langAuto) {
+                        // argmax over the language tokens = detected language
+                        int bestLang = LANG_FIRST;
+                        float bestV = fromFp16(logits[LANG_FIRST]);
+                        for (int i = LANG_FIRST + 1; i < LANG_FIRST + cfg.langCount; i++) {
+                            float v = fromFp16(logits[i]);
+                            if (v > bestV) { bestV = v; bestLang = i; }
+                        }
+                        detectedLang = bestLang;
+                    }
                 } else {
                     uint16_t mx = logits[0];
                     for (int i = 1; i < cfg.vocab; i++) mx = logits[i] > mx ? logits[i] : mx;
@@ -412,10 +433,22 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
                         langDenom += exp(((int)logits[i] - (int)mx) * LOGITS_SCALE);
                     langPt = exp(((int)logits[LANG_PT] - (int)mx) * LOGITS_SCALE);
                     langEn = exp(((int)logits[LANG_EN] - (int)mx) * LOGITS_SCALE);
+                    if (langAuto) {
+                        int bestLang = LANG_FIRST;
+                        for (int i = LANG_FIRST + 1; i < LANG_FIRST + cfg.langCount; i++)
+                            if (logits[i] > logits[bestLang]) bestLang = i;
+                        detectedLang = bestLang;
+                    }
                 }
                 noSpeechProb = (float)(lns / denom);
                 ptProb = langDenom > 0 ? (float)(langPt / langDenom) : 0.0f;
                 enProb = langDenom > 0 ? (float)(langEn / langDenom) : 0.0f;
+                // Substitute the detected language before the prompt's slot 1
+                // is consumed (step 1 feeds prompt[1]).
+                if (langAuto && detectedLang >= 0) {
+                    prompt[1] = detectedLang;
+                    LOGI("lang auto-detect: token %d", detectedLang);
+                }
             }
             if (h->cb.shouldContinue) {
                 ScopedAttach sa;

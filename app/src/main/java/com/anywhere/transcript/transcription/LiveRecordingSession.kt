@@ -215,7 +215,7 @@ class LiveRecordingSession(
                     windowFill += take
                     fo += take
                     if (windowFill == window.size) {
-                        transcribeChunk(window.copyOf(), ctxHandle, useQnn, s.language.ifBlank { "en" })
+                        transcribeChunk(window.copyOf(), ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
                         windowFill = 0
                     }
                 }
@@ -224,7 +224,7 @@ class LiveRecordingSession(
 
             // ---- tail (partial window) as the final live chunk
             if (windowFill > 0) {
-                transcribeChunk(window.copyOf(windowFill), ctxHandle, useQnn, s.language.ifBlank { "en" })
+                transcribeChunk(window.copyOf(windowFill), ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
             }
             if (warmCtx != 0L) {
                 WhisperEngine.destroyContext(warmCtx)
@@ -263,7 +263,7 @@ class LiveRecordingSession(
     private val lastFiles = ArrayDeque<File>()
 
     /** One live chunk through either engine; failures never kill capture. */
-    private fun transcribeChunk(chunk: ShortArray, ctxHandle: Long, useQnn: Boolean, language: String) {
+    private fun transcribeChunk(chunk: ShortArray, ctxHandle: Long, useQnn: Boolean, language: String, translate: Boolean) {
         if (chunk.isEmpty()) return
         runCatching {
             if (useQnn) {
@@ -273,6 +273,7 @@ class LiveRecordingSession(
                     context,
                     pcm,
                     language,
+                    translate = translate,
                     onPartialText = { delta ->
                         streamed += delta
                         _state.update { st -> st.copy(liveText = st.liveText + streamed) }
@@ -292,7 +293,7 @@ class LiveRecordingSession(
                     }
                     override fun shouldContinue(): Boolean = true
                 }
-                WhisperEngine.transcribe(ctxHandle, pcm, language, false, cb)
+                WhisperEngine.transcribe(ctxHandle, pcm, language, translate, cb)
                 if (sb.isNotBlank()) {
                     _state.update { st -> st.copy(liveText = st.liveText + " " + sb.toString().trim()) }
                 }
