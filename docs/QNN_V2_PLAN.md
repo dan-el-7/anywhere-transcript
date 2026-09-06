@@ -1,6 +1,25 @@
 # V2 Engine Plan — QNN/Hexagon NPU for Whisper Large-V3-Turbo
 
-Status: **planned, not started**. This document is the implementation plan for a
+Status: **implemented, awaiting device verification** (the phone dropped off adb
+overnight; run `scripts/test-device.sh` when it reconnects).
+
+Progress (overnight build-out, 2026-09-06):
+- ✅ Phase 2/3 implemented: native core vendored + re-namespaced
+  (`whisper-jni/htp/`), Maven deps (`onnxruntime-android-qnn:1.27.0`,
+  `qnn-runtime:2.48.0`), `QnnWhisperEngine` orchestration, `qnn` backend branch
+  in the coordinator, QNN backend radio in Settings, per-arch catalog entries
+  with in-app zip extraction to `files/qnn`.
+- ✅ Streaming partials + cancellation wired through the decode loop (JNI
+  listener), matching the whisper.cpp engine's UX contract.
+- ✅ Model package acquired: `whisper_large_v3_turbo-precompiled_qnn_onnx-float-
+  qualcomm_snapdragon_8_elite_for_galaxy.zip` (2.2 GB, public S3) — v79 (8 Elite).
+- ⏳ Phase 0 (on-device session verification) + Phase 4 (perf) — blocked on
+  device reconnect. Note: the raw-FastRPC session failure from the v1 engine
+  was actually a *manifest* issue (`uses-native-library`), fixed since — the
+  Hexagon session now opens on the 8 Elite, so QNN sessions are very likely
+  to pass too.
+
+Status: **planned → implemented**. This document is the implementation plan for a
 second inference engine that runs Whisper Large-V3-Turbo on the Hexagon NPU via
 the QNN runtime — the same architecture LocalDream uses for Stable Diffusion and
 Qualcomm's AuraTranslator uses for live Whisper translation.
