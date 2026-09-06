@@ -1,9 +1,9 @@
 package com.anywhere.transcript.engine
 
-import android.util.Base64
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.Base64
 
 /**
  * Whisper detokenizer. The vocab file is a JSON array indexed by token id,
@@ -18,7 +18,8 @@ class WhisperVocab(vocabFile: File) {
 
     init {
         val arr = JSONArray(vocabFile.readText())
-        tokens = Array(arr.length()) { Base64.decode(arr.getString(it), Base64.DEFAULT) }
+        // MIME decoder: tolerant of both standard and URL-safe alphabets/line breaks
+        tokens = Array(arr.length()) { Base64.getMimeDecoder().decode(arr.getString(it)) }
         strings = Array(tokens.size) { String(tokens[it], Charsets.UTF_8) }
     }
 

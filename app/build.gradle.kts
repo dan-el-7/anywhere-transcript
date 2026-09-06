@@ -112,4 +112,6 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    // real org.json for local unit tests (android.jar only stubs it)
+    testImplementation("org.json:json:20240303")
 }
