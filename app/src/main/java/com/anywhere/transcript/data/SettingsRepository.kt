@@ -22,6 +22,8 @@ data class AppSettings(
     val dynamicColor: Boolean = true,
     /** "system" | "light" | "dark". */
     val themeMode: String = "system",
+    /** First-run model picker already completed (or skipped). */
+    val onboardingDone: Boolean = false,
 )
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
@@ -36,6 +38,7 @@ class SettingsRepository(private val context: Context) {
         val TRANSLATE = booleanPreferencesKey("translate")
         val DYNAMIC = booleanPreferencesKey("dynamic_color")
         val THEME = stringPreferencesKey("theme_mode")
+        val ONBOARDING = booleanPreferencesKey("onboarding_done")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -47,6 +50,7 @@ class SettingsRepository(private val context: Context) {
             translateToEnglish = p[Keys.TRANSLATE] ?: false,
             dynamicColor = p[Keys.DYNAMIC] ?: true,
             themeMode = p[Keys.THEME] ?: "system",
+            onboardingDone = p[Keys.ONBOARDING] ?: false,
         )
     }
 
@@ -69,4 +73,5 @@ class SettingsRepository(private val context: Context) {
     suspend fun setTranslate(v: Boolean) = context.dataStore.edit { it[Keys.TRANSLATE] = v }
     suspend fun setDynamicColor(v: Boolean) = context.dataStore.edit { it[Keys.DYNAMIC] = v }
     suspend fun setThemeMode(v: String) = context.dataStore.edit { it[Keys.THEME] = v }
+    suspend fun setOnboardingDone(v: Boolean) = context.dataStore.edit { it[Keys.ONBOARDING] = v }
 }

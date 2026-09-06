@@ -20,9 +20,28 @@ object QnnWhisperEngine {
     private const val WINDOW_SEC = 30
     private const val SAMPLES_PER_WINDOW = WINDOW_SEC * 16000
 
+    // Special-token ids for the AI Hub context-binary exports. The vocab file
+    // stores specials as empty entries, so these are fixed constants (verified
+    // against theedevguy's working demo for these exact binaries):
+    // EOT=50257 (native), SOT=50258, languages from 50259, and the v3 (turbo)
+    // transcribe/notimestamps ids DIFFER from the v2 (small) ones.
+    private const val SOT = 50258
+    private const val TRANSCRIBE = 50360
+    private const val NOTIMESTAMPS = 50364
+
+    // Whisper language-token order; id = LANG_FIRST + index (matches the
+    // native side's LANG_FIRST/LANG_EN/LANG_PT).
+    private const val LANG_FIRST = 50259
+    private val LANG_ORDER = listOf(
+        "en", "zh", "de", "es", "ru", "ko", "ja", "fr", "pt", "tr", "pl", "ca",
+        "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms",
+        "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+        "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+        "et", "mk", "br", "ga", "sq", "is", "hy", "ne", "mn", "bs", "kk",
+    )
+
     private var handle = 0L
     private var vocab: WhisperVocab? = null
-    private var langTokenCache: MutableMap<String, Int> = mutableMapOf()
     private var melReady = false
 
     /** Streaming sink for the current window; set by the coordinator before each window. */
@@ -51,25 +70,52 @@ object QnnWhisperEngine {
         override fun shouldContinue(): Boolean = !cancelCheck()
     }
 
-    fun modelDir(context: Context): File = File(context.getExternalFilesDir(null), "qnn")
+    fun modelDir(context: Context, arch: String): File =
+        File(context.getExternalFilesDir(null), "qnn/$arch")
 
-    fun modelsReady(context: Context): Boolean {
-        val d = modelDir(context)
+    /** One directory per Hexagon arch: packages are arch-locked and must not mix. */
+    fun modelsReady(context: Context, arch: String): Boolean {
+        migrateLegacy(context, arch)
+        val d = modelDir(context, arch)
         return listOf("encoder.onnx", "encoder_qairt_context.bin", "decoder.onnx", "decoder_qairt_context.bin")
             .all { File(d, it).let { f -> f.exists() && f.length() > 0 } }
     }
 
-    fun deleteExtracted(context: Context) {
-        modelDir(context).deleteRecursively()
+    fun deleteExtracted(context: Context, arch: String) {
+        modelDir(context, arch).deleteRecursively()
     }
 
     fun isInitialized(): Boolean = handle != 0L
 
+    /**
+     * Older builds extracted every arch into qnn/ directly; move this arch's
+     * files into the per-arch folder. The app performs the move itself so the
+     * directory has app-owned permissions (dirs made by adb push as shell are
+     * not readable by the app). Guarded to this device's arch: readiness checks
+     * for other archs must not adopt the files.
+     */
+    private fun migrateLegacy(context: Context, arch: String) {
+        val deviceArch = com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79"
+        if (arch != deviceArch) return
+        val legacy = File(context.getExternalFilesDir(null), "qnn")
+        val dst = modelDir(context, arch)
+        var moved = false
+        listOf("encoder.onnx", "encoder_qairt_context.bin", "decoder.onnx", "decoder_qairt_context.bin")
+            .forEach { name ->
+                val src = File(legacy, name)
+                val target = File(dst, name)
+                if (src.isFile && !target.exists()) {
+                    if (dst.mkdirs() || dst.isDirectory) moved = src.renameTo(target) || moved
+                }
+            }
+        if (moved) Log.i(TAG, "migrated legacy qnn/ layout -> qnn/$arch")
+    }
+
     /** Prepares assets + opens the QNN sessions. Returns false on failure (see logcat). */
-    fun initIfNeeded(context: Context): Boolean {
+    fun initIfNeeded(context: Context, arch: String): Boolean {
         if (handle != 0L) return true
         return try {
-            val d = modelDir(context)
+            val d = modelDir(context, arch)
             // mel filters + vocab live as bundled assets; the native side needs file paths
             val assetsDir = File(context.filesDir, "qnn-assets").apply { mkdirs() }
             val filters = File(assetsDir, "mel_filters_128.bin")
@@ -107,12 +153,10 @@ object QnnWhisperEngine {
     }
 
     private fun langToken(languageIso: String): Int {
-        val v = vocab ?: return -1
         val key = languageIso.ifBlank { "en" }.lowercase()
-        langTokenCache[key]?.let { return it }
-        val id = v.idOf("<|$key|>")
-        langTokenCache[key] = id
-        return id
+        // "auto" maps to English (fixed-prompt decode loop; auto-detect is v2.1)
+        val idx = LANG_ORDER.indexOf(key).let { if (it >= 0) it else 0 }
+        return LANG_FIRST + idx
     }
 
     /**
@@ -127,7 +171,10 @@ object QnnWhisperEngine {
         onPartialText: (String) -> Unit = {},
         isCancelled: () -> Boolean = { false },
     ): String {
-        if (!initIfNeeded(context)) return ""
+        if (handle == 0L) {
+            Log.e(TAG, "transcribeWindow before init")
+            return ""
+        }
         val v = vocab ?: return ""
 
         emitted = 0
@@ -142,15 +189,8 @@ object QnnWhisperEngine {
         val mel = HtpWhisper.nativeMel(padded, fp16Out = true)
             ?: run { Log.e(TAG, "mel failed"); return "" }
 
-        val langId = langToken(languageIso).let { if (it >= 0) it else v.idOf("<|en|>") }
-        val sot = v.idOf("<|startoftranscript|>")
-        val transcribe = v.idOf("<|transcribe|>")
-        val notimestamps = v.idOf("<|notimestamps|>")
-        if (langId < 0 || sot < 0 || transcribe < 0 || notimestamps < 0) {
-            Log.e(TAG, "special tokens not found in vocab")
-            return ""
-        }
-        val prompt = intArrayOf(sot, langId, transcribe, notimestamps)
+        val langId = langToken(languageIso)
+        val prompt = intArrayOf(SOT, langId, TRANSCRIBE, NOTIMESTAMPS)
 
         val metrics = FloatArray(4)
         val tokens = HtpWhisper.nativeTranscribe(handle, mel, prompt, metrics)

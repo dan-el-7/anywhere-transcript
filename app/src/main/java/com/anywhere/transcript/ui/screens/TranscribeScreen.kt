@@ -108,29 +108,37 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
     fun isNpu(b: com.anywhere.transcript.engine.BackendDevice) =
         b.name.startsWith("HTP") || b.name.contains("Hexagon", true)
 
-    val backendLabel = when (settings.backendPref) {
-        "npu" -> {
-            val npu = backends.firstOrNull { isNpu(it) }
-            when {
-                npu != null && selected.id.endsWith("-q8_0") -> "NPU (${npu.name})"
-                npu != null -> "NPU needs a q8_0 model → CPU"
-                else -> "NPU unavailable on this device → CPU"
-            }
+    val npu = backends.firstOrNull { isNpu(it) }
+    val gpu = backends.firstOrNull { it.isGpu && !isNpu(it) }
+    val qnnReady = com.anywhere.transcript.engine.QnnWhisperEngine.modelsReady(
+        ctx,
+        com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79",
+    )
+
+    val backendLabel = when {
+        // QNN packages only run on the QNN engine, whatever the preference says
+        selected.id.startsWith("qnn-turbo") -> when {
+            npu == null -> "QNN unavailable on this device → pick a ggml model"
+            qnnReady -> "QNN · Turbo fp16 (Hexagon NPU)"
+            else -> "QNN package not downloaded yet"
         }
-        "gpu" -> {
-            val gpu = backends.firstOrNull { it.isGpu && !isNpu(it) }
+        settings.backendPref == "npu" -> when {
+            npu != null && selected.id.endsWith("-q8_0") -> "NPU (${npu.name})"
+            npu != null -> "NPU needs a q8_0 model → CPU"
+            else -> "NPU unavailable on this device → CPU"
+        }
+        settings.backendPref == "qnn" -> when {
+            npu == null -> "QNN unavailable on this device → CPU"
+            qnnReady -> "QNN · Turbo fp16 (Hexagon NPU)"
+            else -> "QNN needs the NPU Turbo model (Models tab)"
+        }
+        settings.backendPref == "gpu" ->
             if (gpu != null) "GPU (${gpu.name})" else "No GPU driver → CPU"
-        }
-        "cpu" -> "CPU (forced)"
-        else -> {
-            val npu = backends.firstOrNull { isNpu(it) }
-            when {
-                npu != null && selected.id.endsWith("-q8_0") -> "Auto · ${npu.name} NPU"
-                else -> {
-                    val gpu = backends.firstOrNull { it.isGpu && it.name != npu?.name }
-                    if (gpu != null) "Auto · ${gpu.name} GPU" else "Auto · CPU"
-                }
-            }
+        settings.backendPref == "cpu" -> "CPU (forced)"
+        else -> when {
+            npu != null && selected.id.endsWith("-q8_0") -> "Auto · ${npu.name} NPU"
+            gpu != null -> "Auto · ${gpu.name} GPU"
+            else -> "Auto · CPU"
         }
     }
 

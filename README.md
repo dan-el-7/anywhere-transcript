@@ -81,13 +81,36 @@ Debug builds contain `arm64-v8a` + `x86_64` (emulator testing); release builds a
 
 ## NPU support (two engines)
 
-**Engine 1 — Hexagon ggml (working):** whisper.cpp with the `ggml-hexagon`
-backend runs regular GGML models (q8_0) directly on the NPU. The arm64 build
-ships `libwhisperjni.so` with the backend compiled in, plus per-SoC DSP kernel
-drivers (`libggml-htp-v73/v75/v79/v81.so` — Snapdragon 8 Gen 2 → 8 Elite Gen 5),
-built with the Hexagon SDK 6.6.0.0 from the public mirror
-(`github.com/snapdragon-toolchain/hexagon-sdk`). Verified on a Snapdragon 8
-Elite: `HTP0 new session`, 6 HVX + HMX, 3.35 GB vmem.
+### Using the NPU on a Qualcomm phone (user guide)
+
+Both engines work on Snapdragon **8 Gen 1 through 8 Elite Gen 5**. First launch
+shows a picker that already highlights the best option for your chip; afterwards
+everything lives in *Models* and *Settings → Compute backend*.
+
+1. **Models tab** — find the entry marked *"✓ Your chip"*:
+   - **Whisper Turbo · NPU (v79)** etc. — Large-V3-Turbo fp16 as QNN context
+     binaries (~2 GB). Best quality and speed; runs entirely on the Hexagon NPU
+     (~630 ms per 30 s window encoder + ~18 ms/token decoder ≈ **7× realtime**
+     on a Snapdragon 8 Elite).
+   - any **q8_0** ggml model (e.g. Large-v3-Turbo q8_0, 834 MB) — runs on the
+     NPU through whisper.cpp's Hexagon backend, or on CPU anywhere.
+2. **Settings → Compute backend**: pick **QNN** for the Turbo package (the app
+   also routes automatically: a qnn-* model always runs on the QNN engine), or
+   **NPU** for q8_0 models on the ggml engine. *Auto* picks the NPU whenever a
+   compatible model is selected.
+3. Share any audio file from any app, or pick one in the Transcribe tab.
+
+The first transcription opens the QNN sessions (~10–20 s); after that each run
+is instant to start. Everything is offline.
+
+### Engine 1 — Hexagon ggml
+
+whisper.cpp with the `ggml-hexagon` backend runs regular GGML models (q8_0)
+directly on the NPU. The arm64 build ships `libwhisperjni.so` with the backend
+compiled in, plus per-SoC DSP kernel drivers (`libggml-htp-v73/v75/v79/v81.so`
+— Snapdragon 8 Gen 2 → 8 Elite Gen 5), built with the Hexagon SDK 6.6.0.0 from
+the public mirror (`github.com/snapdragon-toolchain/hexagon-sdk`). Verified on
+a Snapdragon 8 Elite: `HTP0 new session`, 6 HVX + HMX, 3.35 GB vmem.
 
 Three non-obvious fixes were required to make it work — all in the app:
 1. `<uses-native-library android:name="libcdsprpc.so" android:required="false"/>`
@@ -100,19 +123,71 @@ Three non-obvious fixes were required to make it work — all in the app:
 3. The backend device is named **HTP** — backend detection must not filter on
    "Hexagon".
 
-**Engine 2 — QNN runtime (in progress):** Whisper Large-V3-Turbo fp16 as
-Qualcomm AI Hub context binaries, executed through ONNX Runtime's QNN Execution
-Provider (`onnxruntime-android-qnn` + `qnn-runtime` Maven artifacts; native core
-vendored from theedevguy/whisper-htp-android, MIT). Per-SoC model packages
-(v73/v75/v79/v81) are downloadable as catalog entries and extracted to
-`files/qnn`. Plan: [docs/QNN_V2_PLAN.md](docs/QNN_V2_PLAN.md).
+### Engine 2 — QNN runtime (working)
+
+Whisper Large-V3-Turbo fp16 as **Qualcomm AI Hub context binaries**, executed
+through ONNX Runtime's QNN Execution Provider (`onnxruntime-android-qnn` +
+`qnn-runtime` Maven artifacts; native core vendored from
+thedevguy/whisper-htp-android, MIT). Packages are downloadable in-app and
+extracted to `files/qnn/<arch>/`. Design notes:
+[docs/QNN_V2_PLAN.md](docs/QNN_V2_PLAN.md).
+
+#### Where the model files actually live
+
+Official listings:
+- https://huggingface.co/qualcomm/Whisper-Large-V3-Turbo (fp16 — what the app uses)
+- https://huggingface.co/qualcomm/Whisper-Large-V3-Turbo-Quantized (w8a16 —
+  needs a different decode path, not yet supported)
+
+Both pages are only manifests: their `release_assets.json` points into
+Qualcomm's AI Hub S3 bucket (`qaihub-public-assets.s3.us-west-2.amazonaws.com`),
+same release (v0.61.0), same bytes the app downloads. The per-chipset zip is
+`whisper_large_v3_turbo-precompiled_qnn_onnx-float-<chip>.zip` (underscores —
+dashed names 403) and contains exactly `encoder.onnx`, `encoder_qairt_context.bin`,
+`decoder.onnx`, `decoder_qairt_context.bin` + metadata.
+
+#### Context binaries are arch-locked
+
+A binary compiled for one Hexagon version loads only on that DSP. The app reads
+`Build.SOC_MODEL` (API 31+) and matches it (substring — Galaxy variants carry
+suffixes like `SM8750-AC`):
+
+| Hexagon | SoC model | Chips |
+|---|---|---|
+| v69 | SM8450 / SM8475 | Snapdragon 8 Gen 1 / 8+ Gen 1 |
+| v73 | SM8550 / SM8635 / SM7675 / QCS8550 | 8 Gen 2 / 8s Gen 3 / 7+ Gen 3 |
+| v75 | SM8650 | Snapdragon 8 Gen 3 |
+| v79 | SM8750 | Snapdragon 8 Elite (incl. -AC Galaxy variants) |
+| v81 | SM8850 | Snapdragon 8 Elite Gen 5 |
+
+#### Vocab / special tokens (the trap that costs a day)
+
+The vocab JSON (`whisper_vocab_v3.json`, 51866 entries) stores tokens as a
+base64 JSON array, but **all special tokens are empty entries** — you cannot
+look up `<|startoftranscript|>` by string. The ids are fixed constants for the
+AI Hub exports, and they are *not* the standard ones:
+
+- `EOT = 50257` (argmax cutoff too — see `htp_whisper.cpp`)
+- prompt = `[SOT=50258, lang, TRANSCRIBE, NOTIMESTAMPS]`
+  - v3 (turbo): `TRANSCRIBE = 50360`, `NOTIMESTAMPS = 50364`
+  - v2 (small): `TRANSCRIBE = 50359`, `NOTIMESTAMPS = 50363`
+- languages start at `50259` (`<|en|>` = 50259, `<|pt|>` = 50267) in whisper's
+  standard language order.
+
+Wrong ids here don't crash — every decode step yields nothing (or EOT
+immediately) and transcriptions come back **empty** while looking fast.
+
+#### Debugging
+
+logcat tags: `QnnWhisper` (engine), `HtpWhisper` (native decode/encode timings),
+`WhisperMel` (features), `Transcription` (pipeline). A healthy run logs
+`encoder: ~630 ms on HTP` then `decoder: N steps … tokens … avg_p=…`.
 
 In the app: *Settings → Compute backend* offers **QNN — Whisper Turbo fp16 on
 NPU**, **NPU — Hexagon ggml (experimental)**, **GPU — OpenCL (opt-in)** and
-**CPU**. *Auto* prefers the Hexagon NPU for q8_0 models, then CPU. OpenCL is
-off unless explicitly selected: some OEM Adreno drivers abort inside ggml's
-CL_CHECK paths (uncatchable from Java), so the shim keeps it disabled until the
-user opts in. Every engine degrades gracefully to CPU.
+**CPU**. OpenCL is off unless explicitly selected: some OEM Adreno drivers abort
+inside ggml's CL_CHECK paths (uncatchable from Java), so the shim keeps it
+disabled until the user opts in. Every engine degrades gracefully to CPU.
 
 Local patches carried on top of the vendored `whisper-src` (v1.9.3):
 - `ggml/src/ggml-hexagon/htp-drv.cpp` — dlopens `libcdsprpc.so` from absolute

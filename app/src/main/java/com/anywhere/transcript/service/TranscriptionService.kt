@@ -69,6 +69,9 @@ class TranscriptionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // FGS contract first, unconditionally: started via startForegroundService,
+        // so a late or skipped startForeground crashes the app (FGS timeout).
+        startForegroundCompat()
         when (intent?.action) {
             ACTION_CANCEL -> {
                 TranscriptionBus.requestCancel()
@@ -80,7 +83,6 @@ class TranscriptionService : Service() {
                     return START_NOT_STICKY
                 }
                 val name = intent.getStringExtra(EXTRA_NAME) ?: "audio"
-                startForegroundCompat()
                 coordinator?.start(uri, name, intent.getStringExtra(EXTRA_BACKEND))
             }
             else -> {

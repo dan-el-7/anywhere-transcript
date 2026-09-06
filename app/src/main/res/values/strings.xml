@@ -5,4 +5,7 @@
     <string name="notif_channel_desc">Progress of on-device audio transcription</string>
     <string name="notif_title">Transcribing</string>
     <string name="notif_cancel">Cancel</string>
+    <string name="notif_dl_channel_name">Model downloads</string>
+    <string name="notif_dl_channel_desc">Progress of model downloads</string>
+    <string name="notif_dl_title">Downloading model</string>
 </resources>

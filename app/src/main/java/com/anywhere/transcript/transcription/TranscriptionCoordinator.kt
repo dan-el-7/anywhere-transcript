@@ -53,40 +53,49 @@ class TranscriptionCoordinator(
         try {
             val s = settingsRepo.current()
             val tier = DeviceTier.fromNameOrNull(s.tierOverride) ?: detectTier()
-            val useQnn = backendOverride == "qnn" || (backendOverride == null && s.backendPref == "qnn")
 
-            var model: ModelInfo? = null
+            // Engine is chosen by the model, not just the preference: QNN
+            // context-binary packages can ONLY run on the QNN engine, so a
+            // selected qnn-* model routes there under every backend preference.
+            var model: ModelInfo? = modelRepo.selectedOrDefault(s, tier)
+            val useQnn = backendOverride == "qnn" || model?.id?.startsWith("qnn-turbo") == true
+
             var modelLabel: String
             var modelId: String
+            var qnnArch = ""
             if (useQnn) {
-                if (!QnnWhisperEngine.modelsReady(context)) {
+                qnnArch = model?.id?.removePrefix("qnn-turbo-")?.takeIf { it != model?.id }
+                    ?: (com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79")
+                if (!QnnWhisperEngine.modelsReady(context, qnnArch)) {
                     bus.update {
                         it.copy(
                             phase = JobPhase.ERROR,
                             fileName = displayName,
-                            error = "QNN model files aren't in the app's files/qnn folder yet.",
+                            error = "QNN model files aren't in the app's files/qnn/$qnnArch folder yet.",
                             modelMissing = true,
                         )
                     }
                     return
                 }
-                modelId = "qnn-turbo-v79"
-                modelLabel = "Large-V3-Turbo QNN"
+                modelId = "qnn-turbo-$qnnArch"
+                modelLabel = com.anywhere.transcript.data.ModelCatalog.byId[modelId]?.label
+                    ?: "Large-V3-Turbo QNN ($qnnArch)"
+                model = null
             } else {
-                model = modelRepo.selectedOrDefault(s, tier)
-                if (!modelRepo.isDownloaded(model.id)) {
+                val m = model ?: return
+                if (!modelRepo.isDownloaded(m.id)) {
                     bus.update {
                         it.copy(
                             phase = JobPhase.ERROR,
                             fileName = displayName,
-                            error = "Model “${model.label}” isn't downloaded yet. Get it from the Models tab.",
+                            error = "Model “${m.label}” isn't downloaded yet. Get it from the Models tab.",
                             modelMissing = true,
                         )
                     }
                     return
                 }
-                modelId = model.id
-                modelLabel = model.label
+                modelId = m.id
+                modelLabel = m.label
             }
 
             val backend = if (useQnn) null else pickBackend(s.backendPref, model!!)
@@ -115,7 +124,7 @@ class TranscriptionCoordinator(
                 c
             }
             if (!useQnn && ctx == 0L) return
-            if (useQnn && !QnnWhisperEngine.initIfNeeded(context)) {
+            if (useQnn && !QnnWhisperEngine.initIfNeeded(context, qnnArch)) {
                 bus.update {
                     it.copy(phase = JobPhase.ERROR, error = "QNN init failed — see logcat (tag QnnWhisper).")
                 }

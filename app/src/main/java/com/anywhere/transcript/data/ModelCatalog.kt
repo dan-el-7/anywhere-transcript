@@ -16,10 +16,15 @@ data class ModelInfo(
     val note: String? = null,
     /** Explicit download URL (custom models); null = default HF repo file. */
     val explicitUrl: String? = null,
+    /** Hexagon arch this QNN context-binary package is compiled for (qnn packages only). */
+    val qnnArch: String? = null,
+    /** Human-readable SoC names this QNN package runs on, e.g. "Snapdragon 8 Elite". */
+    val socLabel: String? = null,
+    val labelOverride: String? = null,
 ) {
     val url: String get() = explicitUrl ?: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$file"
 
-    val label: String = if (explicitUrl != null) {
+    val label: String = labelOverride ?: if (explicitUrl != null) {
         file.removeSuffix(".bin").removePrefix("ggml-").replaceFirstChar { it.uppercase() }
     } else buildString {
         val base = id.substringBefore("-").replaceFirstChar { it.uppercase() }
@@ -64,29 +69,38 @@ object ModelCatalog {
         ModelInfo("medium-q8_0", "ggml-medium-q8_0.bin", 786 * MB, DeviceTier.FLAGSHIP, true, "769M", "Slower"),
         // ---- QNN NPU packages (Whisper-Large-V3-Turbo fp16, Qualcomm AI Hub) ----
         // Zips contain encoder/decoder ONNX + qairt context binaries; the app
-        // extracts them to files/qnn for the QNN engine. Arch-locked builds.
-        qnnModel("v73", "qualcomm-qcs8550-proxy", 2100),
-        qnnModel("v75", "qualcomm-snapdragon-8gen3", 2150),
-        qnnModel("v79", "qualcomm-snapdragon-8-elite-for-galaxy", 2150),
-        qnnModel("v81", "qualcomm-snapdragon-8-elite-gen5-for-galaxy", 2200),
+        // extracts them to files/qnn for the QNN engine. Context binaries are
+        // arch-locked: a v79 build only loads on a Hexagon v79 DSP, so the app
+        // detects the chip and steers the user to the matching package.
+        // Official listing: https://huggingface.co/qualcomm/Whisper-Large-V3-Turbo
+        qnnModel("v69", "qualcomm_snapdragon_8gen1", "Snapdragon 8 Gen 1 / 8+ Gen 1", 1624630419L),
+        qnnModel("v73", "qualcomm_qcs8550_proxy", "Snapdragon 8 Gen 2 / 8s Gen 3", 2018899790L),
+        qnnModel("v75", "qualcomm_snapdragon_8gen3", "Snapdragon 8 Gen 3", 2018865656L),
+        qnnModel("v79", "qualcomm_snapdragon_8_elite_for_galaxy", "Snapdragon 8 Elite", 2016549535L),
+        qnnModel("v81", "qualcomm_snapdragon_8_elite_gen5_for_galaxy", "Snapdragon 8 Elite Gen 5", 2016742045L),
     )
 
     /** Qualcomm AI Hub precompiled Whisper-Large-V3-Turbo (fp16) for a Hexagon arch. */
-    private fun qnnModel(arch: String, chipset: String, sizeMB: Long): ModelInfo {
+    private fun qnnModel(arch: String, socKey: String, socLabel: String, sizeBytes: Long): ModelInfo {
         val url = "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/" +
             "qai-hub-models/models/whisper_large_v3_turbo/releases/v0.61.0/" +
-            "whisper_large_v3_turbo-precompiled_qnn_onnx-float-qualcomm_${chipset}.zip"
+            "whisper_large_v3_turbo-precompiled_qnn_onnx-float-${socKey}.zip"
         return ModelInfo(
             id = "qnn-turbo-$arch",
             file = "qnn-turbo-$arch.zip",
-            sizeBytes = sizeMB * MB,
+            sizeBytes = sizeBytes,
             tier = DeviceTier.FLAGSHIP,
             multilingual = true,
             params = "809M",
             note = "NPU · Turbo fp16",
             explicitUrl = url,
+            qnnArch = arch,
+            socLabel = socLabel,
+            labelOverride = "Whisper Turbo · NPU ($arch)",
         )
     }
+
+    val qnnModels: List<ModelInfo> = all.filter { it.qnnArch != null }
 
     val byId: Map<String, ModelInfo> = all.associateBy { it.id }
 
@@ -103,4 +117,18 @@ object ModelCatalog {
     fun recommendedFor(tier: DeviceTier): ModelInfo = byId.getValue(recommended.getValue(tier))
 
     fun forTier(tier: DeviceTier): List<ModelInfo> = all.filter { it.tier == tier }
+
+    /**
+     * Model choices offered at first launch, best first: the chip-matched NPU
+     * Turbo package when the SoC has a supported Hexagon, then the tier
+     * recommendation, then the lightest useful model.
+     */
+    fun onboardingOptions(tier: DeviceTier, hexagonArch: String?): List<ModelInfo> {
+        val options = mutableListOf<ModelInfo>()
+        if (hexagonArch != null) byId["qnn-turbo-$hexagonArch"]?.let { options.add(it) }
+        val tierPick = recommendedFor(tier)
+        if (options.none { it.id == tierPick.id }) options.add(tierPick)
+        byId["small-q8_0"]?.let { if (options.none { o -> o.id == it.id }) options.add(it) }
+        return options
+    }
 }

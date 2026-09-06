@@ -9,6 +9,7 @@ import com.anywhere.transcript.data.ModelRepository
 import com.anywhere.transcript.engine.WhisperEngine
 import com.anywhere.transcript.data.SettingsRepository
 import com.anywhere.transcript.data.db.AppDatabase
+import com.anywhere.transcript.service.DownloadService
 import com.anywhere.transcript.service.TranscriptionService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,11 +22,15 @@ class TranscriberApp : Application() {
     val db: AppDatabase by lazy { AppDatabase.build(this) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(this) }
     val customRepo: CustomModelsRepository by lazy { CustomModelsRepository(this, appScope) }
-    val modelRepo: ModelRepository by lazy { ModelRepository(this, appScope, customRepo) }
+    val modelRepo: ModelRepository by lazy {
+        ModelRepository(this, appScope, customRepo).apply {
+            onDownloadStarted = { DownloadService.start(this@TranscriberApp) }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        createNotificationChannels()
         // Extract native libs to disk so the DSP loader can find the skel,
         // then point ADSP_LIBRARY_PATH at them before any engine use.
         runCatching {
@@ -38,15 +43,21 @@ class TranscriberApp : Application() {
         }
     }
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            TranscriptionService.CHANNEL_ID,
-            getString(R.string.notif_channel_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = getString(R.string.notif_channel_desc)
-        }
+    private fun createNotificationChannels() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                TranscriptionService.CHANNEL_ID,
+                getString(R.string.notif_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = getString(R.string.notif_channel_desc) },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                DownloadService.CHANNEL_ID,
+                getString(R.string.notif_dl_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = getString(R.string.notif_dl_channel_desc) },
+        )
     }
 }

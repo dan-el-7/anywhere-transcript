@@ -46,7 +46,7 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
 
-    data class PendingShare(val uri: Uri, val name: String)
+    data class PendingShare(val uri: Uri, val name: String, val backendOverride: String? = null)
 
     private val pendingShare = MutableStateFlow<PendingShare?>(null)
     private val viewModel: AppViewModel by viewModels()
@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
         }
         android.util.Log.i("ShareRoute", "handleIntent: ${uris.size} stream uri(s)")
         val source = uris.firstOrNull() ?: return
+        val backendOverride = intent?.getStringExtra("debug_backend")
 
         // Copy immediately: share permissions on the source Uri can be transient.
         lifecycleScope.launch(Dispatchers.IO) {
@@ -98,7 +99,7 @@ class MainActivity : ComponentActivity() {
             }.getOrDefault(false)
 
             if (copied) {
-                pendingShare.value = PendingShare(Uri.fromFile(dst), name)
+                pendingShare.value = PendingShare(Uri.fromFile(dst), name, backendOverride)
             } else {
                 dst.delete()
                 TranscriptionBus.update {
@@ -115,6 +116,12 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppRoot(vm: AppViewModel, pendingShare: MutableStateFlow<MainActivity.PendingShare?>) {
+    val onboarding by vm.needsOnboarding.collectAsStateWithLifecycle()
+    if (onboarding) {
+        com.anywhere.transcript.ui.screens.OnboardingScreen(vm)
+        return
+    }
+
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val pending by pendingShare.collectAsStateWithLifecycle()
@@ -126,7 +133,7 @@ private fun AppRoot(vm: AppViewModel, pendingShare: MutableStateFlow<MainActivit
     LaunchedEffect(pending) {
         pending?.let { p ->
             tab = 0
-            vm.requestTranscribe(p.uri, p.name)
+            vm.requestTranscribe(p.uri, p.name, p.backendOverride)
             pendingShare.value = null
         }
     }

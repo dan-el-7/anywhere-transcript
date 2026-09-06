@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anywhere.transcript.R
 import com.anywhere.transcript.data.DeviceTier
+import com.anywhere.transcript.data.Hexagon
 import com.anywhere.transcript.data.ModelCatalog
 import com.anywhere.transcript.data.ModelInfo
 import com.anywhere.transcript.data.ModelStatus
@@ -72,6 +74,13 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
 
     var urlInput by rememberSaveable { mutableStateOf("") }
 
+    // chip check: which QNN context-binary package actually loads on this SoC
+    val soc = remember { Hexagon.socModel() }
+    val myArch = remember(soc) { Hexagon.archForSoc(soc) }
+    val myArchLabel = remember(myArch) {
+        ModelCatalog.qnnModels.firstOrNull { it.qnnArch == myArch }?.socLabel
+    }
+
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -82,6 +91,8 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         modifier = modifier,
         topBar = { TopAppBar(title = { Text("Models") }) },
     ) { pad ->
+        // re-check disk state on entry (files can appear via adb push or imports)
+        LaunchedEffect(Unit) { vm.rescanModels() }
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -99,6 +110,14 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             backends.forEach { b ->
                                 AssistChip(onClick = {}, label = { Text(backendLabel(b.name, b.kind)) })
                             }
+                        }
+                        if (soc != null) {
+                            Text(
+                                if (myArch != null) "Chip: $soc · Hexagon $myArch NPU"
+                                else "Chip: $soc",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                         Text(
                             "Models use ${Format.bytes(usage)} of storage",
@@ -162,6 +181,8 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                         state = states[model.id],
                         selected = (settings.modelId ?: ModelCatalog.recommended[tier]) == model.id,
                         npuSelected = npuMode,
+                        myArch = myArch,
+                        myArchLabel = myArchLabel,
                         onDownload = { vm.download(model) },
                         onCancelDownload = { vm.cancelDownload(model.id) },
                         onDelete = { vm.deleteModel(model.id) },
@@ -333,6 +354,8 @@ private fun ModelRow(
     state: com.anywhere.transcript.data.ModelDownloadState?,
     selected: Boolean,
     npuSelected: Boolean = false,
+    myArch: String? = null,
+    myArchLabel: String? = null,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
     onDelete: () -> Unit,
@@ -388,7 +411,15 @@ private fun ModelRow(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (model.note != null && status != ModelStatus.DOWNLOADING) {
+            if (model.qnnArch != null) {
+                // NPU packages are arch-locked: say plainly which chip each fits
+                val chipText = when (myArch) {
+                    model.qnnArch -> "✓ Your chip — ${myArchLabel ?: "Hexagon $myArch"}"
+                    null -> "Hexagon ${model.qnnArch} · ${model.socLabel}"
+                    else -> "For ${model.socLabel}"
+                }
+                AssistChip(onClick = {}, label = { Text(chipText) })
+            } else if (model.note != null && status != ModelStatus.DOWNLOADING) {
                 AssistChip(onClick = {}, label = { Text(model.note) })
             }
             if (npuSelected && !model.id.endsWith("-q8_0")) {

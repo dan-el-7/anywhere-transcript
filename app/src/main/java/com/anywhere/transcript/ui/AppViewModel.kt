@@ -15,6 +15,7 @@ import com.anywhere.transcript.data.AppSettings
 import com.anywhere.transcript.data.DeviceTier
 import com.anywhere.transcript.data.ModelCatalog
 import com.anywhere.transcript.data.ModelInfo
+import com.anywhere.transcript.data.ModelStatus
 import com.anywhere.transcript.data.db.HistoryEntry
 import com.anywhere.transcript.engine.BackendDevice
 import com.anywhere.transcript.engine.WhisperEngine
@@ -62,14 +63,32 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
         effectiveTier.map { ModelCatalog.recommendedFor(it) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ModelCatalog.recommendedFor(autoTier.value))
 
+    /** First-run onboarding: shows until dismissed, or once any model exists. */
+    val needsOnboarding: StateFlow<Boolean> =
+        combine(settings, modelStates) { s, states ->
+            !s.onboardingDone && states.values.none { it.status == ModelStatus.DOWNLOADED }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Marks onboarding done; [modelId] is the picked model (null = skip). */
+    fun finishOnboarding(modelId: String?) {
+        viewModelScope.launch {
+            if (modelId != null) {
+                selectModel(modelId)
+                if (modelId.startsWith("qnn-turbo")) graph.settingsRepo.setBackendPref("qnn")
+            }
+            graph.settingsRepo.setOnboardingDone(true)
+        }
+    }
+
     val engineInfo: String by lazy { runCatching { WhisperEngine.systemInfo() }.getOrElse { "unavailable" } }
     val backends: List<BackendDevice> by lazy { runCatching { WhisperEngine.backends() }.getOrElse { emptyList() } }
 
     // ---- transcription ----------------------------------------------------------
 
-    fun requestTranscribe(uri: Uri, displayName: String) {
+    fun requestTranscribe(uri: Uri, displayName: String, backendOverride: String? = null) {
         val model = graph.modelRepo.selectedOrDefault(settings.value, effectiveTier.value)
-        if (!graph.modelRepo.isDownloaded(model.id)) {
+        val usesWhisper = backendOverride == null || backendOverride == "auto"
+        if (usesWhisper && !graph.modelRepo.isDownloaded(model.id)) {
             TranscriptionBus.update {
                 it.copy(
                     phase = com.anywhere.transcript.transcription.JobPhase.ERROR,
@@ -84,6 +103,7 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
             action = TranscriptionService.ACTION_START
             data = uri
             putExtra(TranscriptionService.EXTRA_NAME, displayName)
+            if (backendOverride != null) putExtra(TranscriptionService.EXTRA_BACKEND, backendOverride)
         }
         ContextCompat.startForegroundService(getApplication(), intent)
     }
@@ -103,6 +123,7 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
     fun deleteModel(modelId: String) = graph.modelRepo.delete(modelId)
     fun diskUsageBytes(): Long = graph.modelRepo.diskUsageBytes()
     fun isDownloaded(modelId: String): Boolean = graph.modelRepo.isDownloaded(modelId)
+    fun rescanModels() = graph.modelRepo.rescan()
 
     fun selectModel(modelId: String?) {
         viewModelScope.launch { graph.settingsRepo.setModelId(modelId) }

@@ -54,5 +54,10 @@
             android:name=".service.TranscriptionService"
             android:exported="false"
             android:foregroundServiceType="mediaProcessing|dataSync" />
+
+        <service
+            android:name=".service.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
