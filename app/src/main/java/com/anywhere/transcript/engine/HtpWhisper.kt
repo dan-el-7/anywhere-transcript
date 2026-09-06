@@ -14,12 +14,22 @@ object HtpWhisper {
     const val VARIANT_SMALL_W8A16 = 0
     const val VARIANT_TURBO_FP16 = 1
 
+    /** Streaming + cancellation hooks for the decode loop. */
+    interface Listener {
+        /** Partial generated ids so far. Return false to stop the decode. */
+        fun onPartial(ids: IntArray): Boolean
+
+        /** Polled every decode step; return false to stop. */
+        fun shouldContinue(): Boolean
+    }
+
     /** Creates the encoder + decoder QNN sessions. Returns 0 on failure (logcat tag HtpWhisper). */
     external fun nativeInit(
         nativeLibDir: String,
         encoderPath: String,
         decoderPath: String,
         variant: Int,
+        listener: Listener?,
     ): Long
 
     /**

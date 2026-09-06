@@ -26,6 +26,27 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static JavaVM* g_jvm = nullptr;
+
+jint JNI_OnLoad(JavaVM* vm, void*) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
+// Attach the calling thread to the JVM for callback invocations.
+struct ScopedAttach {
+    JNIEnv* env = nullptr;
+    bool detach = false;
+    ScopedAttach() {
+        if (g_jvm == nullptr) return;
+        if (g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return;
+        if (g_jvm->AttachCurrentThread(&env, nullptr) == JNI_OK) detach = true;
+    }
+    ~ScopedAttach() {
+        if (detach && g_jvm) g_jvm->DetachCurrentThread();
+    }
+};
+
 namespace {
 
 constexpr int WINDOW = 200;  // decoder attention window (199 cache + current)
@@ -55,6 +76,15 @@ constexpr uint16_t MASK_ATTEND_U16 = 65535;  // dequantizes to 0.0
 constexpr uint16_t MASK_OFF_U16 = 0;         // dequantizes to -100.0
 constexpr uint8_t KV_ZP_U8 = 128;
 
+// Streaming + cancellation hooks into the decode loop. `listener` (optional)
+// receives partial generated-id arrays every few steps; returning false from
+// shouldContinue stops the decode, mirroring the whisper.cpp engine's contract.
+struct JavaCallbacks {
+    jobject listener = nullptr;          // global ref; HtpWhisper.Listener
+    jmethodID onPartial = nullptr;       // ([I)Z
+    jmethodID shouldContinue = nullptr;  // ()Z
+};
+
 struct Handle {
     void* ortLib = nullptr;
     const OrtApi* api = nullptr;
@@ -68,6 +98,7 @@ struct Handle {
     int32_t inputId = 0;
     int32_t positionId = 0;
     uint16_t mask[WINDOW] = {};  // raw bits (uint16 or fp16 per variant)
+    JavaCallbacks cb{};
 
     size_t kvElem() const { return cfg.fp16 ? 2 : 1; }
     size_t kvBytes() const { return (size_t)cfg.kvHeads * CACHE * HEAD_DIM * kvElem(); }
@@ -128,8 +159,12 @@ void resetSelfKV(Handle* h) {
     }
 }
 
-void destroy(Handle* h) {
+void destroy(JNIEnv* env, Handle* h) {
     if (!h) return;
+    if (h->cb.listener && env) {
+        env->DeleteGlobalRef(h->cb.listener);
+        h->cb.listener = nullptr;
+    }
     if (h->api) {
         for (auto*& v : h->cross)
             if (v) h->api->ReleaseValue(v);
@@ -146,7 +181,8 @@ void destroy(Handle* h) {
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_anywhere_transcript_engine_HtpWhisper_nativeInit(
-    JNIEnv* env, jobject, jstring jLibDir, jstring jEncPath, jstring jDecPath, jint variant) {
+    JNIEnv* env, jobject, jstring jLibDir, jstring jEncPath, jstring jDecPath, jint variant,
+    jobject listener) {
     const char* c;
     c = env->GetStringUTFChars(jLibDir, nullptr);  std::string libDir = c;  env->ReleaseStringUTFChars(jLibDir, c);
     c = env->GetStringUTFChars(jEncPath, nullptr); std::string encPath = c; env->ReleaseStringUTFChars(jEncPath, c);
@@ -154,37 +190,44 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeInit(
 
     auto* h = new Handle();
     h->cfg = (variant == 1) ? CFG_TURBO : CFG_SMALL;
+    if (listener) {
+        h->cb.listener = env->NewGlobalRef(listener);
+        jclass cls = env->GetObjectClass(h->cb.listener);
+        h->cb.onPartial = env->GetMethodID(cls, "onPartial", "([I)Z");
+        h->cb.shouldContinue = env->GetMethodID(cls, "shouldContinue", "()Z");
+        env->DeleteLocalRef(cls);
+    }
     std::string ortPath = libDir + "/libonnxruntime.so";
     h->ortLib = dlopen(ortPath.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!h->ortLib) {
         LOGE("dlopen(%s): %s", ortPath.c_str(), dlerror());
-        destroy(h);
+        destroy(env, h);
         return 0;
     }
     auto getApiBase = reinterpret_cast<const OrtApiBase* (*)()>(dlsym(h->ortLib, "OrtGetApiBase"));
     if (!getApiBase) {
         LOGE("dlsym OrtGetApiBase: %s", dlerror());
-        destroy(h);
+        destroy(env, h);
         return 0;
     }
     h->api = getApiBase()->GetApi(ORT_API_VERSION);
     if (!h->api) {
         LOGE("GetApi(%d) returned null (runtime older than header?)", ORT_API_VERSION);
-        destroy(h);
+        destroy(env, h);
         return 0;
     }
     const OrtApi* api = h->api;
     if (!check(api, api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "HtpWhisper", &h->env), "CreateEnv") ||
         !check(api, api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &h->mem),
                "CreateCpuMemoryInfo")) {
-        destroy(h);
+        destroy(env, h);
         return 0;
     }
 
     h->enc = createQnnSession(h, encPath.c_str(), libDir);
-    if (!h->enc) { destroy(h); return 0; }
+    if (!h->enc) { destroy(env, h); return 0; }
     h->dec = createQnnSession(h, decPath.c_str(), libDir);
-    if (!h->dec) { destroy(h); return 0; }
+    if (!h->dec) { destroy(env, h); return 0; }
     LOGI("sessions created (variant=%d: %d layers, %d kv-heads, %d mel bins, %s)", variant,
          h->cfg.layers, h->cfg.kvHeads, h->cfg.melBins, h->cfg.fp16 ? "fp16" : "w8a16");
 
@@ -374,6 +417,26 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
                 ptProb = langDenom > 0 ? (float)(langPt / langDenom) : 0.0f;
                 enProb = langDenom > 0 ? (float)(langEn / langDenom) : 0.0f;
             }
+            if (h->cb.shouldContinue) {
+                ScopedAttach sa;
+                if (!sa.env) { ok = false; break; }
+                jboolean cont = sa.env->CallBooleanMethod(h->cb.listener, h->cb.shouldContinue);
+                if (sa.env->ExceptionCheck()) { sa.env->ExceptionClear(); cont = JNI_TRUE; }
+                if (cont != JNI_TRUE) { ok = false; break; }
+            }
+            if (h->cb.onPartial && (step % 8 == 7 || step == promptLen)) {
+                ScopedAttach sa;
+                if (sa.env) {
+                    jintArray arr = sa.env->NewIntArray((jsize)generated.size());
+                    if (arr) {
+                        if (!generated.empty())
+                            sa.env->SetIntArrayRegion(arr, 0, (jsize)generated.size(), generated.data());
+                        sa.env->CallBooleanMethod(h->cb.listener, h->cb.onPartial, arr);
+                        if (sa.env->ExceptionCheck()) sa.env->ExceptionClear();
+                        sa.env->DeleteLocalRef(arr);
+                    }
+                }
+            }
             if (step >= promptLen - 1) {
                 void* ldata = nullptr;
                 api->GetTensorMutableData(outs[0], &ldata);
@@ -439,6 +502,6 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_anywhere_transcript_engine_HtpWhisper_nativeFree(JNIEnv*, jobject, jlong jh) {
-    destroy(reinterpret_cast<Handle*>(jh));
+Java_com_anywhere_transcript_engine_HtpWhisper_nativeFree(JNIEnv* env, jobject, jlong jh) {
+    destroy(env, reinterpret_cast<Handle*>(jh));
 }

@@ -25,6 +25,32 @@ object QnnWhisperEngine {
     private var langTokenCache: MutableMap<String, Int> = mutableMapOf()
     private var melReady = false
 
+    /** Streaming sink for the current window; set by the coordinator before each window. */
+    @Volatile
+    var partialSink: ((String) -> Unit)? = null
+
+    /** Cancellation check polled by the native decode loop. */
+    @Volatile
+    var cancelCheck: () -> Boolean = { false }
+
+    private var emitted = 0
+
+    private val listener = object : HtpWhisper.Listener {
+        override fun onPartial(ids: IntArray): Boolean {
+            if (cancelCheck()) return false
+            if (ids.size > emitted) {
+                val v = vocab ?: return true
+                val full = v.decode(ids).trim()
+                val partial = full.substring(minOf(emitted, full.length))
+                if (partial.isNotEmpty()) partialSink?.invoke(partial)
+                emitted = ids.size
+            }
+            return true
+        }
+
+        override fun shouldContinue(): Boolean = !cancelCheck()
+    }
+
     fun modelDir(context: Context): File = File(context.getExternalFilesDir(null), "qnn")
 
     fun modelsReady(context: Context): Boolean {
@@ -62,6 +88,7 @@ object QnnWhisperEngine {
                 File(d, "encoder.onnx").absolutePath,
                 File(d, "decoder.onnx").absolutePath,
                 HtpWhisper.VARIANT_TURBO_FP16,
+                listener,
             )
             val ok = handle != 0L
             Log.i(TAG, "init: handle=$handle")
@@ -91,10 +118,21 @@ object QnnWhisperEngine {
     /**
      * Transcribes one ≤30s window of 16kHz mono PCM. Language "auto" maps to
      * English (turbo's decode loop uses a fixed prompt; auto-detect lands in v2.1).
+     * [onPartialText] receives streaming text as tokens are decoded.
      */
-    fun transcribeWindow(context: Context, pcm: FloatArray, languageIso: String): String {
+    fun transcribeWindow(
+        context: Context,
+        pcm: FloatArray,
+        languageIso: String,
+        onPartialText: (String) -> Unit = {},
+        isCancelled: () -> Boolean = { false },
+    ): String {
         if (!initIfNeeded(context)) return ""
         val v = vocab ?: return ""
+
+        emitted = 0
+        partialSink = onPartialText
+        cancelCheck = isCancelled
 
         val clipped = if (pcm.size > SAMPLES_PER_WINDOW) pcm.copyOf(SAMPLES_PER_WINDOW) else pcm
         val padded = if (clipped.size < SAMPLES_PER_WINDOW) {

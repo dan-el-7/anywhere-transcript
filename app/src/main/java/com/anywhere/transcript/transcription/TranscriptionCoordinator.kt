@@ -147,10 +147,18 @@ class TranscriptionCoordinator(
                     bus.update { it.copy(phase = JobPhase.TRANSCRIBING) }
 
                     if (useQnn) {
+                        // live partials stream into the UI; the authoritative window
+                        // text is appended once the window's decode finishes
+                        var streamed = ""
                         val windowText = QnnWhisperEngine.transcribeWindow(
                             context,
                             window,
                             s.language.ifBlank { "en" },
+                            onPartialText = { delta ->
+                                streamed += delta
+                                bus.update { it.copy(partialText = streamed.trim()) }
+                            },
+                            isCancelled = { TranscriptionBus.cancelRequested },
                         )
                         if (TranscriptionBus.cancelRequested) break
                         if (windowText.isNotEmpty()) {
