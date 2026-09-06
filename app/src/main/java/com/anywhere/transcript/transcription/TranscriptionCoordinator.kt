@@ -212,8 +212,9 @@ class TranscriptionCoordinator(
 
     private fun pickBackend(pref: String, model: com.anywhere.transcript.data.ModelInfo): BackendDevice {
         val gpus = WhisperEngine.gpuBackends()
-        val npu = gpus.firstOrNull { it.name.startsWith("Hexagon") }
-        val gpu = gpus.firstOrNull { !it.name.startsWith("Hexagon") } ?: gpus.firstOrNull()
+        val npu = gpus.firstOrNull { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
+        val gpu = gpus.firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
+            ?: gpus.firstOrNull()
         // The Hexagon path supports q8_0/f32 quants; the default recommendations are q8_0.
         val npuUsable = npu != null && model.id.endsWith("-q8_0")
         return when (pref) {

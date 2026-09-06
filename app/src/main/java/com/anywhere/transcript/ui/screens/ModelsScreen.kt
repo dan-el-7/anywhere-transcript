@@ -53,7 +53,7 @@ import com.anywhere.transcript.ui.AppViewModel
 import com.anywhere.transcript.ui.components.Format
 
 private fun backendLabel(name: String, kind: String): String = when {
-    name.startsWith("Hexagon") -> "Hexagon NPU"
+    name.startsWith("HTP") || name.contains("Hexagon", true) -> "Hexagon NPU"
     kind == "accel" -> "$name NPU"
     kind == "gpu" -> "$name GPU"
     else -> name

@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        android.util.Log.i("ShareRoute", "handleIntent: action=${intent?.action}")
         val uris: List<Uri> = when (intent?.action) {
             Intent.ACTION_SEND ->
                 listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
                     .filterNotNull()
             else -> emptyList()
         }
+        android.util.Log.i("ShareRoute", "handleIntent: ${uris.size} stream uri(s)")
         val source = uris.firstOrNull() ?: return
 
         // Copy immediately: share permissions on the source Uri can be transient.

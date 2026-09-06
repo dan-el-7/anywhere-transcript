@@ -105,22 +105,25 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
     val selected = remember(settings.modelId, tier) { vm.selectedModel() }
     val backends = remember { vm.backends }
 
+    fun isNpu(b: com.anywhere.transcript.engine.BackendDevice) =
+        b.name.startsWith("HTP") || b.name.contains("Hexagon", true)
+
     val backendLabel = when (settings.backendPref) {
         "npu" -> {
-            val npu = backends.firstOrNull { it.name.startsWith("Hexagon") }
+            val npu = backends.firstOrNull { isNpu(it) }
             when {
-                npu != null && selected.id.endsWith("-q8_0") -> "NPU (Hexagon)"
+                npu != null && selected.id.endsWith("-q8_0") -> "NPU (${npu.name})"
                 npu != null -> "NPU needs a q8_0 model → CPU"
                 else -> "NPU unavailable on this device → CPU"
             }
         }
         "gpu" -> {
-            val gpu = backends.firstOrNull { it.isGpu && !it.name.startsWith("Hexagon") }
+            val gpu = backends.firstOrNull { it.isGpu && !isNpu(it) }
             if (gpu != null) "GPU (${gpu.name})" else "No GPU driver → CPU"
         }
         "cpu" -> "CPU (forced)"
         else -> {
-            val npu = backends.firstOrNull { it.name.startsWith("Hexagon") }
+            val npu = backends.firstOrNull { isNpu(it) }
             when {
                 npu != null && selected.id.endsWith("-q8_0") -> "Auto · ${npu.name} NPU"
                 else -> {

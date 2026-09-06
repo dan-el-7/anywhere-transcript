@@ -72,6 +72,9 @@ android {
 
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+        // Extract .so files to disk: the DSP loader must read the hexagon skel
+        // (libggml-htp-vXX.so) as a real file via ADSP_LIBRARY_PATH.
+        jniLibs { useLegacyPackaging = true }
     }
 }
 

@@ -71,6 +71,20 @@ Java_com_anywhere_transcript_engine_WhisperEngine_systemInfo(JNIEnv *env, jobjec
     return env->NewStringUTF(whisper_print_system_info());
 }
 
+// The FastRPC DSP loader searches ADSP_LIBRARY_PATH for the skel library
+// (libggml-htp-vXX.so). Apps must point it at their own extracted lib dir —
+// the DSP-side default paths (/vendor/dsp/cdsp etc.) are not app-writable.
+JNIEXPORT void JNICALL
+Java_com_anywhere_transcript_engine_WhisperEngine_setDspLibraryPath(JNIEnv *env, jobject, jstring dir) {
+    const char *d = env->GetStringUTFChars(dir, nullptr);
+    if (!d) return;
+    std::string paths = std::string(d)
+        + ";/vendor/dsp/cdsp;/system/lib/rfsa/adsp;/vendor/lib/rfsa/adsp;/system/lib64";
+    setenv("ADSP_LIBRARY_PATH", paths.c_str(), 1);
+    LOGI("ADSP_LIBRARY_PATH=%s", paths.c_str());
+    env->ReleaseStringUTFChars(dir, d);
+}
+
 // Each entry: "name;description;kind" where kind is cpu|gpu|accel
 JNIEXPORT jobjectArray JNICALL
 Java_com_anywhere_transcript_engine_WhisperEngine_listBackends(JNIEnv *env, jobject) {

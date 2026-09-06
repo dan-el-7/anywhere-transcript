@@ -34,6 +34,13 @@ object WhisperEngine {
     /** whisper_print_system_info(): compiled backends and CPU features. */
     external fun systemInfo(): String
 
+    /**
+     * Must be called once before any context creation: points the FastRPC DSP
+     * loader (ADSP_LIBRARY_PATH) at the app's extracted native lib dir so the
+     * libggml-htp-vXX.so skel can be found and loaded onto the DSP.
+     */
+    external fun setDspLibraryPath(path: String)
+
     /** Compiled backend devices, each "name;description;cpu|gpu|accel". */
     external fun listBackends(): Array<String>
 

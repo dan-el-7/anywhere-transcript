@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.os.Build
 import com.anywhere.transcript.data.CustomModelsRepository
 import com.anywhere.transcript.data.ModelRepository
+import com.anywhere.transcript.engine.WhisperEngine
 import com.anywhere.transcript.data.SettingsRepository
 import com.anywhere.transcript.data.db.AppDatabase
 import com.anywhere.transcript.service.TranscriptionService
@@ -25,6 +26,11 @@ class TranscriberApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Extract native libs to disk so the DSP loader can find the skel,
+        // then point ADSP_LIBRARY_PATH at them before any engine use.
+        runCatching {
+            WhisperEngine.setDspLibraryPath(applicationInfo.nativeLibraryDir)
+        }
     }
 
     private fun createNotificationChannel() {

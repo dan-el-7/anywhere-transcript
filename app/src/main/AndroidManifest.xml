@@ -16,6 +16,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.App.Starting">
 
+        <!-- Expose the vendor FastRPC/OpenCL drivers to this app's linker namespace.
+             Without this, targetSdk 31+ hides public vendor libs and the NPU/OpenCL
+             backends can never load (dlopen fails with "not accessible for namespace"). -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL_adreno.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
