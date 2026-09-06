@@ -79,43 +79,44 @@ Debug builds contain `arm64-v8a` + `x86_64` (emulator testing); release builds a
 - `service/` — foreground service (`mediaProcessing` on API 35+, `dataSync` before)
   with progress + cancel; state flows through the process-wide `TranscriptionBus`.
 
-## NPU support (WIP)
+## NPU support (two engines)
 
-The arm64 build ships with the Hexagon NPU backend compiled in
-(`app/src/main/jniLibs/arm64-v8a/libwhisperjni.so`, plus per-SoC DSP kernel
-drivers `libggml-htp-v73/v75/v79/v81.so` covering Snapdragon 8 Gen 2 → 8 Elite
-Gen 5). Built with the Hexagon SDK 6.6.0.0 (available without a Qualcomm login
-from the public mirror `github.com/snapdragon-toolchain/hexagon-sdk`); the
-Gradle build copies them verbatim for arm64 and compiles the non-NPU build for
-other ABIs. See `hexagon-npu-libs/HEXAGON_INTEGRATION.md` for checksums, caveats
-and the full rebuild recipe (WSL2/Linux).
+**Engine 1 — Hexagon ggml (working):** whisper.cpp with the `ggml-hexagon`
+backend runs regular GGML models (q8_0) directly on the NPU. The arm64 build
+ships `libwhisperjni.so` with the backend compiled in, plus per-SoC DSP kernel
+drivers (`libggml-htp-v73/v75/v79/v81.so` — Snapdragon 8 Gen 2 → 8 Elite Gen 5),
+built with the Hexagon SDK 6.6.0.0 from the public mirror
+(`github.com/snapdragon-toolchain/hexagon-sdk`). Verified on a Snapdragon 8
+Elite: `HTP0 new session`, 6 HVX + HMX, 3.35 GB vmem.
 
-**What works / what's WIP:**
+Three non-obvious fixes were required to make it work — all in the app:
+1. `<uses-native-library android:name="libcdsprpc.so" android:required="false"/>`
+   in the manifest. With targetSdk 31+, Android hides public vendor libraries
+   from the app's linker namespace unless declared; without this, every dlopen
+   of the vendor driver fails with a misleading "not accessible" error.
+2. `ADSP_LIBRARY_PATH` must point at the app's extracted native lib dir
+   (`setenv` from JNI) so the DSP loader can find the skel library — libs inside
+   the APK are invisible to it, hence `useLegacyPackaging`.
+3. The backend device is named **HTP** — backend detection must not filter on
+   "Hexagon".
 
-- ✅ Detection, graceful fallback: if the DSP session can't open, the device is
-  skipped and transcription continues on CPU/GPU — no crashes either way.
-- ✅ Works end-to-end on devices whose vendor policy permits unsigned PD
-  FastRPC sessions from third-party apps.
-- ⚠️ **WIP** — some OEM builds (e.g. ColorOS/Realme) reject unsigned PD sessions
-  (`failed to enable unsigned PD`) and block the vendor driver from app
-  namespaces entirely, so the NPU stays unavailable there. Making session
-  failures fully non-fatal across OEM variants is the remaining work; a QNN
-  SDK-based engine (converted context-binary models, like Qualcomm's
-  AuraTranslator) is the alternative long-term route.
+**Engine 2 — QNN runtime (in progress):** Whisper Large-V3-Turbo fp16 as
+Qualcomm AI Hub context binaries, executed through ONNX Runtime's QNN Execution
+Provider (`onnxruntime-android-qnn` + `qnn-runtime` Maven artifacts; native core
+vendored from theedevguy/whisper-htp-android, MIT). Per-SoC model packages
+(v73/v75/v79/v81) are downloadable as catalog entries and extracted to
+`files/qnn`. Plan: [docs/QNN_V2_PLAN.md](docs/QNN_V2_PLAN.md).
 
-In the app: *Settings → Compute backend* offers **NPU — Hexagon (experimental)**;
-*Auto* prefers NPU when a Hexagon device is present and the selected model is a
-q8_0 quant (the recommended models are), then GPU, then CPU. NPU runs
-q8_0/f32-quant models only — incompatible models are flagged in the Models tab.
+In the app: *Settings → Compute backend* offers **QNN — Whisper Turbo fp16 on
+NPU**, **NPU — Hexagon ggml (experimental)**, **GPU — OpenCL (opt-in)** and
+**CPU**. *Auto* prefers the Hexagon NPU for q8_0 models, then CPU. OpenCL is
+off unless explicitly selected: some OEM Adreno drivers abort inside ggml's
+CL_CHECK paths (uncatchable from Java), so the shim keeps it disabled until the
+user opts in. Every engine degrades gracefully to CPU.
 
 Local patches carried on top of the vendored `whisper-src` (v1.9.3):
 - `ggml/src/ggml-hexagon/htp-drv.cpp` — dlopens `libcdsprpc.so` from absolute
-  vendor paths. Several OEM Android builds (ColorOS/Realme, etc.) expose vendor
-  public libraries only via absolute paths, so the plain-name lookup fails and
-  the NPU silently disappears.
-- OpenCL: some OEM builds block `dlopen("/vendor/lib64/libOpenCL.so")` outright
-  (its Adreno dependency is not a public library) — the shim logs every
-  candidate failure under the `opencl-shim` logcat tag for diagnosis.
+  vendor paths as well as by plain name.
 
 ## License notes
 
