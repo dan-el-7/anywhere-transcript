@@ -57,8 +57,8 @@ import com.anywhere.transcript.ui.AppViewModel
 import com.anywhere.transcript.ui.components.Format
 
 private fun backendLabel(name: String, kind: String): String = when {
-    name.startsWith("HTP") || name.contains("Hexagon", true) -> "Hexagon NPU"
-    kind == "accel" -> "$name NPU"
+    // HTP/accel never reach here (filtered out of the capability row above —
+    // raw DSP dispatch is a dead end); only CPU/GPU labels remain.
     kind == "gpu" -> "$name GPU"
     else -> name
 }
@@ -213,14 +213,10 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 item(key = "hdr-all") {
                     SectionHeader("All models", tag = null)
                 }
-                val npuMode = settings.backendPref == "npu"
                 DeviceTier.entries.forEach { group ->
                     val models = ModelCatalog.forTier(group)
                         .filter { m -> !hideOthers || m.qnnArch == null || m.qnnArch == myArch }
-                        .let { list ->
-                        if (npuMode) list.sortedWith(compareBy({ !it.id.endsWith("-q8_0") }, { it.sizeBytes }))
-                        else list.sortedBy { it.sizeBytes }
-                    }
+                        .sortedBy { it.sizeBytes }
                     item(key = "sub-$group") {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -241,7 +237,6 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             model = model,
                             state = states[model.id],
                             selected = (settings.modelId ?: ModelCatalog.recommended[tier]) == model.id,
-                            npuSelected = npuMode,
                             myArch = myArch,
                             myArchLabel = myArchLabel,
                             onDownload = { vm.download(model) },
@@ -257,7 +252,7 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             item(key = "hdr-custom") {
                 SectionHeader("Custom models", tag = null)
                 Text(
-                    "Add a ggml Whisper model from a URL, or import a .bin file from this device. NPU runs q8_0/f32 models only.",
+                    "Add a ggml Whisper model from a URL, or import a .bin / QNN .zip package from this device.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -302,7 +297,7 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             Text("Add by URL")
                         }
                         Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                            Text("Import .bin file")
+                            Text("Import file")
                         }
                     }
                     if (customError != null) {
@@ -412,7 +407,6 @@ private fun ModelRow(
     model: ModelInfo,
     state: com.anywhere.transcript.data.ModelDownloadState?,
     selected: Boolean,
-    npuSelected: Boolean = false,
     myArch: String? = null,
     myArchLabel: String? = null,
     onDownload: () -> Unit,
@@ -487,13 +481,6 @@ private fun ModelRow(
                 }
             } else if (model.note != null && status != ModelStatus.DOWNLOADING) {
                 AssistChip(onClick = {}, label = { Text(model.note) })
-            }
-            if (npuSelected && !model.id.endsWith("-q8_0")) {
-                Text(
-                    "Not NPU-compatible — the NPU only runs q8_0/f32 models; this one would fall back to CPU.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
             }
         }
     }

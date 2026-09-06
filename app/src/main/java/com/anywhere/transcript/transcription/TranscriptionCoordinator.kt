@@ -57,8 +57,16 @@ class TranscriptionCoordinator(
             // Engine is chosen by the model, not just the preference: QNN
             // context-binary packages can ONLY run on the QNN engine, so a
             // selected qnn-* model routes there under every backend preference.
-            var model: ModelInfo? = modelRepo.selectedOrDefault(s, tier)
-            val useQnn = backendOverride == "qnn" || model?.id?.startsWith("qnn-turbo") == true
+            // A "qnn" PREFERENCE also routes there when this chip has the
+            // package — the Transcribe screen already labels that state
+            // "QNN · Turbo fp16 (Hexagon NPU)", so the coordinator must
+            // actually do it (a ggml model picked underneath is ignored).
+            val model: ModelInfo? = modelRepo.selectedOrDefault(s, tier)
+            val hexArch = com.anywhere.transcript.data.Hexagon.deviceArch()
+            val qnnReadyHere = hexArch != null && QnnWhisperEngine.modelsReady(context, hexArch)
+            val useQnn = backendOverride == "qnn" ||
+                model?.id?.startsWith("qnn-turbo") == true ||
+                (s.backendPref == "qnn" && qnnReadyHere)
             var modelLabel: String
             var modelId: String
             var qnnArch = ""
@@ -66,7 +74,7 @@ class TranscriptionCoordinator(
             var modelPath: String? = null
             if (useQnn) {
                 qnnArch = model?.id?.removePrefix("qnn-turbo-")?.takeIf { it != model?.id }
-                    ?: (com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79")
+                    ?: (hexArch ?: "v79")
                 if (!QnnWhisperEngine.modelsReady(context, qnnArch)) {
                     bus.update {
                         it.copy(
@@ -81,7 +89,6 @@ class TranscriptionCoordinator(
                 modelId = "qnn-turbo-$qnnArch"
                 modelLabel = com.anywhere.transcript.data.ModelCatalog.byId[modelId]?.label
                     ?: "Large-V3-Turbo QNN ($qnnArch)"
-                model = null
             } else {
                 // No usable ggml model: fail loudly (with a path to the Models
                 // tab) instead of silently doing nothing — the old `?: return`
@@ -112,10 +119,9 @@ class TranscriptionCoordinator(
                 modelId = m.id
                 modelLabel = m.label
                 modelPath = modelRepo.modelFile(m.id).absolutePath
-                model = m
             }
 
-            var backend = if (useQnn) null else pickBackend(s.backendPref, model!!)
+            var backend = if (useQnn) null else pickBackend(s.backendPref)
             bus.update {
                 it.copy(
                     phase = JobPhase.PREPARING,
@@ -139,6 +145,9 @@ class TranscriptionCoordinator(
                     // flaky GPU drivers): retry on CPU instead of killing the
                     // job — the README promises automatic CPU fallback.
                     Log.w(TAG, "context init failed on ${backend.name}, retrying on CPU")
+                    // GPU init may have left the shim half-loaded; make sure
+                    // the CPU retry can't trip over it
+                    WhisperEngine.setOpenclEnabled(false)
                     backend = cpuDevice()
                     ctx = WhisperEngine.createContext(
                         modelPath!!,
@@ -312,21 +321,27 @@ class TranscriptionCoordinator(
         return DeviceTier.detect(info.totalMem)
     }
 
-    private fun pickBackend(pref: String, model: ModelInfo): BackendDevice {
-        val gpus = WhisperEngine.gpuBackends()
-        val npu = gpus.firstOrNull { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
-        val gpu = gpus.firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
-        // Direct Hexagon dispatch is opt-in ONLY (Settings → NPU): HTP sessions
-        // are OEM-gated and usually fail at init from an app UID. Auto/GPU picks
-        // never attempt it — the NPU is reached via the QNN engine instead.
+    private fun pickBackend(pref: String): BackendDevice {
+        // The OpenCL shim is opt-in (uncatchable aborts on some OEM drivers).
+        // A GPUOpenCL device sits in ggml's registry even while the shim is
+        // disabled — using it then aborts natively — so GPU only counts as
+        // "available" once the user opted in (settings side-channel flag).
+        val gpuAllowed = context.getSharedPreferences("engine_flags", Context.MODE_PRIVATE)
+            .getBoolean("opencl_enabled", false)
+        val gpu = if (gpuAllowed) {
+            WhisperEngine.gpuBackends()
+                .firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
+        } else null
+        // No direct-NPU dispatch: the HTP runs precompiled graphs only and app
+        // DSP sessions are OEM-gated. The NPU is reached exclusively via the
+        // QNN engine (precompiled context binaries). Legacy "npu"/"qnn" prefs
+        // land here only for ggml models on chips without the QNN package →
+        // same as auto.
         return when (pref) {
-            "npu", "qnn" -> npu ?: gpu ?: cpuDevice()
-            "gpu" -> (gpu ?: npu ?: cpuDevice()).also {
-                // GPU is an explicit opt-in: OpenCL aborts on some OEM drivers
-                WhisperEngine.setOpenclEnabled(gpu != null && !it.name.startsWith("HTP"))
+            "gpu" -> (gpu ?: cpuDevice()).also {
+                WhisperEngine.setOpenclEnabled(gpu != null)
             }
             "cpu" -> cpuDevice()
-            // auto: GPU if present, else CPU (OpenCL opt-in only; never raw HTP)
             else -> gpu ?: cpuDevice()
         }
     }

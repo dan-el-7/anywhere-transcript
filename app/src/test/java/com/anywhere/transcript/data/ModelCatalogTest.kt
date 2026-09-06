@@ -42,7 +42,7 @@ class ModelCatalogTest {
                 assertFalse(m.multilingual)
             }
         }
-        // q8_0 quant is the NPU-compatible family: the per-tier recommendations use it
+        // q8_0 is near-lossless: the per-tier recommendations use it
         DeviceTier.entries.forEach { tier ->
             assertTrue(ModelCatalog.recommendedFor(tier).id.endsWith("-q8_0"))
         }

@@ -29,7 +29,8 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
 # parse text="..." attributes with python (regex on <node> tags)
 ```
 
-- Bottom-tab x-centers ≈ 190 (Transcribe) / 631 (Models) / 1070 (History).
+- Bottom-tab x-centers ≈ 147 (Transcribe) / 470 (Record) / 793 (Models) /
+  1116 (History) on the 1080x2712 screen.
 - Compose nodes often lack clickable=true — tap TextView centers, it works.
 - vision_analyze is BROKEN here (401s) — verify via uiautomator text dumps,
   never screenshots.
@@ -51,15 +52,35 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
 - **QNN works.** Whisper Turbo fp16 as AI Hub precompiled context binaries,
   arch-locked per Hexagon (v69/v73/v75/v79/v81, matched via `Build.SOC_MODEL`
   substring — Galaxy `-AC` suffixes included). ~7× realtime on 8 Elite.
-- **Direct/raw NPU does NOT work from apps.** Per Qualcomm: HTP executes
-  quantized/precompiled graphs only (never raw float), and app-UID DSP
-  sessions are OEM-gated (detection APIs report HTP even where app sessions
-  are blocked, e.g. ColorOS). UI must never present raw "Hexagon NPU" as a
-  working engine — capability chips show CPU / GPU / QNN only.
+- **Direct/raw NPU was REMOVED (v0.2.3) — do not re-add.** Per Qualcomm, the HTP
+  executes quantized/precompiled graphs only (never raw float), and app-UID DSP
+  sessions are OEM-gated. Same wall on MediaTek (NeuroPilot runtime API is
+  vendor-partition only for third-party apps). The NPU is used exclusively via
+  the QNN engine. The per-SoC skels (`libggml-htp-v*.so`) were deleted from
+  `jniLibs`; `ADSP_LIBRARY_PATH` setup was removed from `TranscriberApp`.
+  Settings offers Auto / QNN / GPU / CPU only. Stored legacy `"npu"` prefs fall
+  through to auto behavior (gpu → cpu) in `pickBackend`.
+- **`backendPref == "qnn"` routes to the QNN engine whenever the chip's package
+  is present** (coordinator + LiveRecordingSession). It must NEVER fall through
+  to whisper.cpp GPU: the GPUOpenCL device sits in ggml's registry even with the
+  OpenCL shim disabled, and touching it aborts natively (uncatchable
+  `ggml_abort` in `ggml_backend_dev_by_type` — proven by tombstone). The auto
+  path likewise only counts GPU as available when the `engine_flags`
+  `opencl_enabled` side-channel is set (user opted in via Settings → GPU).
 - Engine routing is MODEL-based (`TranscriptionCoordinator`: `qnn-turbo-*`
   → QNN engine under every pref). CPU always works. OpenCL opt-in only
   (some Adreno drivers abort uncatchably). whisper.cpp `listBackends`
   may list HTP — that is detection, not usability.
+- **Record tab (live transcription)**: `LiveRecordingSession` preloads the
+  engine BEFORE capture (QNN session setup / ggml context = 10–20 s; without
+  preload the first live chunk lags far behind the mic). 48 kHz capture →
+  `RateConverter` → 16 kHz; every 5 s chunk decodes live (QNN or CPU); the
+  whole take is also written to a 16 kHz WAV (`WavWriter`, patched-on-close
+  header). Stop → the finished take is re-transcribed IN-PROCESS via
+  `TranscriberApp.coordinator` — NOT via `requestTranscribe`/FGS: racing a
+  DONE-state service teardown with `startForegroundService` crashes with
+  `ForegroundServiceDidNotStartInTimeException`. The bus drives the Record
+  screen's final-transcript card; History entry lands normally.
 - Special-token ids are hardcoded constants, NOT vocab lookups (AI Hub vocab
   stores specials as empty entries): SOT=50258, TRANSCRIBE=50360 (turbo),
   NOTIMESTAMPS=50364, langs from 50259. Wrong ids → fast but EMPTY output.
@@ -88,8 +109,8 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
   (that was O(n²) memcpy; decode of long files crawled).
 - Backend init failure (createContext == 0) retries on CPU once before
   erroring; the bus's `backend` field is updated so the UI shows what ran.
-- Auto backend pref never dispatches raw HTP (GPU or CPU only); direct NPU
-  is the explicit Settings radio only.
+- Auto backend pref never dispatches raw HTP (GPU or CPU only); there is no
+  direct-NPU option anymore (removed v0.2.3, skels deleted).
 
 ## Models screen rules
 
@@ -99,6 +120,10 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
   needs known arch (`Hexagon.deviceArch()`), else show all.
 - `ModelCatalog.qnnModels` = the 5 AI Hub zips (S3 URLs, `*_precompiled_qnn_onnx-float-<chip>.zip`,
   underscores — dashed names 403). Sizes are display-only approximations.
+- **Import** accepts ggml `.bin` (unchanged) AND AI Hub QNN `.zip` packages:
+  `QnnImport` sniffs the arch (vXX token in entry paths, else SoC key in the
+  filename), rejects wrong-chip builds, extracts the 4 payload files into
+  `files/qnn/<arch>`, then `rescan()` marks the catalog entry downloaded.
 - LazyColumn spacing is uniform 8dp — do NOT add per-item top paddings
   (that stacking caused the oversized gaps before).
 

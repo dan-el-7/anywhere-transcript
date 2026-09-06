@@ -106,11 +106,11 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
     val selected = remember(settings.modelId, tier) { vm.selectedModel() }
     val backends = remember { vm.backends }
 
-    fun isNpu(b: com.anywhere.transcript.engine.BackendDevice) =
-        b.name.startsWith("HTP") || b.name.contains("Hexagon", true)
-
-    val npu = backends.firstOrNull { isNpu(it) }
-    val gpu = backends.firstOrNull { it.isGpu && !isNpu(it) }
+    val gpu = backends.firstOrNull { it.isGpu && !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
+    // QNN availability = known Hexagon arch (SoC check), NOT whisper.cpp backend
+    // detection: listBackends HTP reporting died with the deleted skels, and was
+    // OEM-gated anyway. The QNN engine brings its own runtime.
+    val hexArch = remember { com.anywhere.transcript.data.Hexagon.deviceArch() }
     val qnnReady = com.anywhere.transcript.engine.QnnWhisperEngine.modelsReady(
         ctx,
         com.anywhere.transcript.data.Hexagon.deviceArch() ?: "v79",
@@ -120,17 +120,12 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
         selected == null -> "No model yet — download one in the Models tab"
         // QNN packages only run on the QNN engine, whatever the preference says
         selected.id.startsWith("qnn-turbo") -> when {
-            npu == null -> "QNN unavailable on this device → pick a ggml model"
+            hexArch == null -> "QNN unavailable on this device → pick a ggml model"
             qnnReady -> "QNN · Turbo fp16 (Hexagon NPU)"
             else -> "QNN package not downloaded yet"
         }
-        settings.backendPref == "npu" -> when {
-            npu != null && selected.id.endsWith("-q8_0") -> "NPU (${npu.name})"
-            npu != null -> "NPU needs a q8_0 model → CPU"
-            else -> "NPU unavailable on this device → CPU"
-        }
         settings.backendPref == "qnn" -> when {
-            npu == null -> "QNN unavailable on this device → CPU"
+            hexArch == null -> "QNN unavailable on this device → CPU"
             qnnReady -> "QNN · Turbo fp16 (Hexagon NPU)"
             else -> "QNN needs the NPU Turbo model (Models tab)"
         }

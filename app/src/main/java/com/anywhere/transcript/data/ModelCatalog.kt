@@ -3,8 +3,7 @@ package com.anywhere.transcript.data
 /**
  * Whisper ggml models hosted on Hugging Face (ggerganov/whisper.cpp).
  * Sizes are approximate (used for display and rough sanity checks only).
- * q8_0 is near-lossless and is also the quant family supported by the
- * experimental Hexagon NPU path.
+ * q8_0 is near-lossless.
  */
 data class ModelInfo(
     val id: String,

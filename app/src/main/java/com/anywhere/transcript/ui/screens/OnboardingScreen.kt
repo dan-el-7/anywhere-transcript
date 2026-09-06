@@ -54,7 +54,10 @@ fun OnboardingScreen(vm: AppViewModel) {
     val backends = remember { vm.backends }
     val soc = remember { Hexagon.socModel() }
     val arch = remember(soc) { Hexagon.archForSoc(soc) }
-    val npuPresent = backends.any { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
+    // NPU presence = known Hexagon arch (SoC check), not backend detection:
+    // listBackends HTP reporting is gone with the deleted skels and was
+    // OEM-gated anyway. The QNN engine brings its own runtime.
+    val npuPresent = arch != null
 
     val options = remember(tier) { ModelCatalog.onboardingOptions(tier, arch) }
     var selectedId by remember(tier) { mutableStateOf(options.firstOrNull()?.id) }

@@ -151,12 +151,18 @@ private fun AppRoot(vm: AppViewModel, pendingShare: MutableStateFlow<MainActivit
                     NavigationBarItem(
                         selected = tab == 1,
                         onClick = { tab = 1 },
-                        icon = { Icon(painterResource(R.drawable.ic_layers), contentDescription = null) },
-                        label = { Text("Models") },
+                        icon = { Icon(painterResource(R.drawable.ic_mic), contentDescription = null) },
+                        label = { Text("Record") },
                     )
                     NavigationBarItem(
                         selected = tab == 2,
                         onClick = { tab = 2 },
+                        icon = { Icon(painterResource(R.drawable.ic_layers), contentDescription = null) },
+                        label = { Text("Models") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 3,
+                        onClick = { tab = 3 },
                         icon = { Icon(painterResource(R.drawable.ic_history), contentDescription = null) },
                         label = { Text("History") },
                     )
@@ -165,14 +171,23 @@ private fun AppRoot(vm: AppViewModel, pendingShare: MutableStateFlow<MainActivit
         },
     ) { pad ->
         Column(Modifier.padding(bottom = pad.calculateBottomPadding())) {
+            // one-shot navigation from Record error card → Models tab
+            val goToModels by vm.goToModels.collectAsStateWithLifecycle()
+            LaunchedEffect(goToModels) {
+                if (goToModels) {
+                    tab = 2
+                    vm.goToModels.value = false
+                }
+            }
             when {
                 showSettings -> SettingsScreen(vm, onBack = { showSettings = false })
                 tab == 0 -> TranscribeScreen(
                     vm = vm,
-                    onGoToModels = { tab = 1 },
+                    onGoToModels = { tab = 2 },
                     onOpenSettings = { showSettings = true },
                 )
-                tab == 1 -> ModelsScreen(vm)
+                tab == 1 -> com.anywhere.transcript.ui.screens.RecordScreen(vm)
+                tab == 2 -> ModelsScreen(vm)
                 else -> HistoryScreen(vm)
             }
         }

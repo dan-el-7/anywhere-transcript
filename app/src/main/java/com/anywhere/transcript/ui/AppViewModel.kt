@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
 
@@ -156,8 +158,15 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
     fun importModel(uri: Uri) {
         viewModelScope.launch {
             val app = getApplication<Application>()
-            val name = (com.anywhere.transcript.ui.components.displayName(app, uri) ?: "imported.bin")
+            val name = (com.anywhere.transcript.ui.components.displayName(app, uri) ?: "imported")
                 .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+
+            // QNN context-binary package (AI Hub zip): extract to files/qnn/<arch>
+            if (name.endsWith(".zip", true)) {
+                importQnnZip(uri, name)
+                return@launch
+            }
+
             val fileName = if (name.endsWith(".bin", true)) name else "$name.bin"
             try {
                 val dst = graph.modelRepo.modelFile("import-tmp").parentFile!!.resolve(fileName)
@@ -172,6 +181,62 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
                 }
             } catch (t: Throwable) {
                 _customModelError.value = "Import failed: ${t.message ?: "unknown error"}"
+            }
+        }
+    }
+
+    /**
+     * Imports an AI Hub QNN zip: sniffs the arch, extracts the 4 payload
+     * files into files/qnn/<arch>, and marks the matching catalog entry
+     * downloaded. Wrong-arch packages are rejected with a clear message.
+     */
+    private suspend fun importQnnZip(uri: Uri, name: String) {
+        val app = getApplication<Application>()
+        withContext(Dispatchers.IO) {
+            try {
+                val stream = app.contentResolver.openInputStream(uri)
+                    ?: run {
+                        _customModelError.value = "Could not read the selected file"
+                        return@withContext
+                    }
+                val sniffed = stream.use { com.anywhere.transcript.data.QnnImport.sniffArch(it) }
+                    ?: com.anywhere.transcript.data.QnnImport.archFromSocKey(name)
+                val deviceArch = com.anywhere.transcript.data.Hexagon.deviceArch()
+
+                val arch = when {
+                    sniffed != null -> sniffed
+                    deviceArch != null -> deviceArch
+                    else -> {
+                        _customModelError.value = "Could not tell which chip this QNN package is for."
+                        return@withContext
+                    }
+                }
+
+                if (deviceArch != null && arch != deviceArch) {
+                    _customModelError.value = "This package is for Hexagon $arch — this device is $deviceArch. " +
+                        "Context binaries are chip-locked."
+                    return@withContext
+                }
+
+                // extract (re-open: the sniff consumed the stream)
+                app.contentResolver.openInputStream(uri)?.use { input ->
+                    val written = com.anywhere.transcript.data.QnnImport.extract(
+                        input,
+                        com.anywhere.transcript.engine.QnnWhisperEngine.modelDir(app, arch),
+                    ) ?: run {
+                        _customModelError.value = "Could not read the QNN package zip."
+                        return@use
+                    }
+                    if (written.containsAll(com.anywhere.transcript.data.QnnImport.REQUIRED)) {
+                        graph.modelRepo.rescan()
+                        _customModelError.value = null
+                    } else {
+                        _customModelError.value = "Package incomplete — expected encoder/decoder .onnx + " +
+                            "qairt context binaries (found: ${written.joinToString()})."
+                    }
+                }
+            } catch (t: Throwable) {
+                _customModelError.value = "QNN import failed: ${t.message ?: "unknown error"}"
             }
         }
     }
@@ -191,6 +256,47 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
 
     fun clearHistory() {
         viewModelScope.launch { graph.db.historyDao().clearAll() }
+    }
+
+    // ---- recording (live transcription) ---------------------------------------
+
+    private val _recordState = MutableStateFlow(com.anywhere.transcript.transcription.RecordUiState())
+    val recordState: StateFlow<com.anywhere.transcript.transcription.RecordUiState> = _recordState.asStateFlow()
+
+    /** One-shot navigation request from screens without a nav callback. */
+    val goToModels = MutableStateFlow(false)
+
+    private val recordSession by lazy {
+        com.anywhere.transcript.transcription.LiveRecordingSession(
+            getApplication(),
+            viewModelScope,
+            graph.settingsRepo,
+            graph.modelRepo,
+        ).also { session ->
+            viewModelScope.launch { session.state.collect { _recordState.value = it } }
+            session.onTakeFinished = { file ->
+                // Run the final pass in-process (no FGS restart): stopping a
+                // take can race a DONE-state service teardown, and
+                // startForegroundService at that instant crashes with
+                // ForegroundServiceDidNotStartInTimeException. The user is
+                // in-app watching the Record tab; the bus state drives the UI.
+                viewModelScope.launch(Dispatchers.IO) {
+                    graph.coordinator.start(
+                        android.net.Uri.fromFile(file),
+                        "Recording ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date())}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun startRecording() {
+        recordSession.reset()
+        recordSession.start()
+    }
+
+    fun stopRecording() {
+        recordSession.stop()
     }
 
     // ---- settings ---------------------------------------------------------------

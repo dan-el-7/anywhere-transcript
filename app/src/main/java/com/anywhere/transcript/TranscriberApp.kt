@@ -22,6 +22,22 @@ class TranscriberApp : Application() {
     val db: AppDatabase by lazy { AppDatabase.build(this) }
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(this) }
     val customRepo: CustomModelsRepository by lazy { CustomModelsRepository(this, appScope) }
+
+    /**
+     * Shared transcription coordinator (model routing, windowed decode,
+     * history insert). The FGS uses its own instance (same process-wide bus);
+     * this one lets in-app callers (Record tab final pass) run jobs without
+     * a service start.
+     */
+    val coordinator: com.anywhere.transcript.transcription.TranscriptionCoordinator by lazy {
+        com.anywhere.transcript.transcription.TranscriptionCoordinator(
+            this,
+            appScope,
+            settingsRepo,
+            modelRepo,
+            db.historyDao(),
+        )
+    }
     val modelRepo: ModelRepository by lazy {
         ModelRepository(this, appScope, customRepo).apply {
             onDownloadStarted = { DownloadService.start(this@TranscriberApp) }
@@ -31,11 +47,9 @@ class TranscriberApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
-        // Extract native libs to disk so the DSP loader can find the skel,
-        // then point ADSP_LIBRARY_PATH at them before any engine use.
-        runCatching {
-            WhisperEngine.setDspLibraryPath(applicationInfo.nativeLibraryDir)
-        }
+        // No DSP loader setup: raw Hexagon dispatch was removed (HTP runs
+        // precompiled graphs only; the NPU is used exclusively via the QNN
+        // engine's context binaries). The QNN path needs no ADSP_LIBRARY_PATH.
         // OpenCL is opt-in (crash-safe default off); kept in sync by SettingsRepository
         runCatching {
             val flags = getSharedPreferences("engine_flags", MODE_PRIVATE)
