@@ -7,10 +7,12 @@ import android.os.SystemClock
 import android.util.Log
 import com.anywhere.transcript.audio.AudioDecoder
 import com.anywhere.transcript.data.DeviceTier
+import com.anywhere.transcript.data.ModelInfo
 import com.anywhere.transcript.data.ModelRepository
 import com.anywhere.transcript.data.SettingsRepository
 import com.anywhere.transcript.data.db.HistoryEntry
 import com.anywhere.transcript.engine.BackendDevice
+import com.anywhere.transcript.engine.QnnWhisperEngine
 import com.anywhere.transcript.engine.TranscriptionCallback
 import com.anywhere.transcript.engine.WhisperEngine
 import kotlinx.coroutines.CancellationException
@@ -21,7 +23,8 @@ import java.io.IOException
 
 /**
  * Runs the full pipeline for one file: pick model/backend → open decoder →
- * windowed whisper transcription (streaming partials, cancellable) → history.
+ * windowed transcription (streaming partials, cancellable) → history.
+ * Two engines: whisper.cpp (v1, CPU/OpenCL/Hexagon-ggml) and QNN turbo (v2, NPU).
  */
 class TranscriptionCoordinator(
     private val context: Context,
@@ -31,9 +34,11 @@ class TranscriptionCoordinator(
     private val historyDao: com.anywhere.transcript.data.db.HistoryDao,
 ) {
     private var job: Job? = null
+    private var backendOverride: String? = null
 
-    fun start(uri: Uri, displayName: String) {
+    fun start(uri: Uri, displayName: String, backendOverride: String? = null) {
         if (job?.isActive == true) return
+        this.backendOverride = backendOverride
         job = scope.launch { run(uri, displayName) }
     }
 
@@ -48,43 +53,71 @@ class TranscriptionCoordinator(
         try {
             val s = settingsRepo.current()
             val tier = DeviceTier.fromNameOrNull(s.tierOverride) ?: detectTier()
-            val model = modelRepo.selectedOrDefault(s, tier)
+            val useQnn = backendOverride == "qnn" || (backendOverride == null && s.backendPref == "qnn")
 
-            if (!modelRepo.isDownloaded(model.id)) {
-                bus.update {
-                    it.copy(
-                        phase = JobPhase.ERROR,
-                        fileName = displayName,
-                        error = "Model “${model.label}” isn't downloaded yet. Get it from the Models tab.",
-                        modelMissing = true,
-                    )
+            var model: ModelInfo? = null
+            var modelLabel: String
+            var modelId: String
+            if (useQnn) {
+                if (!QnnWhisperEngine.modelsReady(context)) {
+                    bus.update {
+                        it.copy(
+                            phase = JobPhase.ERROR,
+                            fileName = displayName,
+                            error = "QNN model files aren't in the app's files/qnn folder yet.",
+                            modelMissing = true,
+                        )
+                    }
+                    return
                 }
-                return
+                modelId = "qnn-turbo-v79"
+                modelLabel = "Large-V3-Turbo QNN"
+            } else {
+                model = modelRepo.selectedOrDefault(s, tier)
+                if (!modelRepo.isDownloaded(model.id)) {
+                    bus.update {
+                        it.copy(
+                            phase = JobPhase.ERROR,
+                            fileName = displayName,
+                            error = "Model “${model.label}” isn't downloaded yet. Get it from the Models tab.",
+                            modelMissing = true,
+                        )
+                    }
+                    return
+                }
+                modelId = model.id
+                modelLabel = model.label
             }
 
-            val backend = pickBackend(s.backendPref, model)
-            android.util.Log.i(
-                TAG,
-                "job start: model=${model.id} backend=${backend.name} pref=${s.backendPref} tier=$tier",
-            )
+            val backend = if (useQnn) null else pickBackend(s.backendPref, model!!)
             bus.update {
                 it.copy(
                     phase = JobPhase.PREPARING,
                     fileName = displayName,
-                    modelId = model.id,
-                    modelLabel = model.label,
-                    backend = backend.name,
+                    modelId = modelId,
+                    modelLabel = modelLabel,
+                    backend = backend?.name ?: "QNN",
                 )
             }
+            Log.i(TAG, "job start: model=$modelId backend=${backend?.name ?: "QNN"} pref=${s.backendPref} tier=$tier")
 
-            val ctx = WhisperEngine.createContext(
-                modelRepo.modelFile(model.id).absolutePath,
-                backend.name,
-                WhisperEngine.defaultThreads(),
-            )
-            if (ctx == 0L) {
+            val ctx = if (useQnn) 0L else run {
+                val c = WhisperEngine.createContext(
+                    modelRepo.modelFile(model!!.id).absolutePath,
+                    backend!!.name,
+                    WhisperEngine.defaultThreads(),
+                )
+                if (c == 0L) {
+                    bus.update {
+                        it.copy(phase = JobPhase.ERROR, error = "Could not load model “$modelLabel”.")
+                    }
+                }
+                c
+            }
+            if (!useQnn && ctx == 0L) return
+            if (useQnn && !QnnWhisperEngine.initIfNeeded(context)) {
                 bus.update {
-                    it.copy(phase = JobPhase.ERROR, error = "Could not load model “${model.label}”.")
+                    it.copy(phase = JobPhase.ERROR, error = "QNN init failed — see logcat (tag QnnWhisper).")
                 }
                 return
             }
@@ -98,10 +131,11 @@ class TranscriptionCoordinator(
                 audioMs = maxOf(opened.durationMs, 0L)
                 bus.update { it.copy(phase = JobPhase.DECODING, progress = -1f) }
 
-                val windowSec = when (tier) {
-                    DeviceTier.LOW -> 60
-                    DeviceTier.MID -> 120
-                    DeviceTier.FLAGSHIP -> 300
+                val windowSec = when {
+                    useQnn -> 30
+                    tier == DeviceTier.LOW -> 60
+                    tier == DeviceTier.MID -> 120
+                    else -> 300
                 }
                 val totalMs = opened.durationMs
                 var windowStartMs = 0L
@@ -112,40 +146,61 @@ class TranscriptionCoordinator(
                     val windowMs = window.size / 16L
                     bus.update { it.copy(phase = JobPhase.TRANSCRIBING) }
 
-                    val cb = object : TranscriptionCallback {
-                        override fun onProgress(percent: Int) {
-                            val frac = if (totalMs > 0) {
-                                ((windowStartMs + windowMs * percent / 100.0) / totalMs).coerceIn(0.0, 0.999)
-                            } else {
-                                0.999
-                            }
-                            bus.update { it.copy(progress = frac.toFloat()) }
-                        }
-
-                        override fun onSegment(startMs: Long, endMs: Long, segText: String): Boolean {
-                            val trimmed = segText.trim()
-                            if (trimmed.isNotEmpty()) {
-                                segments.add(TranscriptSegment(startMs + windowStartMs, endMs + windowStartMs, trimmed))
-                                text.append(trimmed).append(' ')
-                                bus.update { it.copy(partialText = text.toString().trim()) }
-                            }
-                            return true
-                        }
-
-                        override fun shouldContinue(): Boolean = !TranscriptionBus.cancelRequested
-                    }
-
-                    val ok = WhisperEngine.transcribe(ctx, window, s.language, s.translateToEnglish, cb)
-                    val peak = window.maxOf { kotlin.math.abs(it) }
-                    val rms = kotlin.math.sqrt(window.map { it * it }.average().coerceAtLeast(0.0)).toFloat()
-                    android.util.Log.i(
-                        TAG,
-                        "window done: sec=${window.size / 16000.0} peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)} segments=${segments.size} ok=$ok",
-                    )
-                    if (!ok) {
+                    if (useQnn) {
+                        val windowText = QnnWhisperEngine.transcribeWindow(
+                            context,
+                            window,
+                            s.language.ifBlank { "en" },
+                        )
                         if (TranscriptionBus.cancelRequested) break
-                        throw IOException("Whisper failed to transcribe this audio")
+                        if (windowText.isNotEmpty()) {
+                            segments.add(TranscriptSegment(windowStartMs, windowStartMs + windowMs, windowText))
+                            text.append(windowText).append(' ')
+                            bus.update { it.copy(partialText = text.toString().trim()) }
+                        }
+                        val peak = window.maxOf { kotlin.math.abs(it) }
+                        val rms = kotlin.math.sqrt(window.map { it * it }.average().coerceAtLeast(0.0)).toFloat()
+                        Log.i(
+                            TAG,
+                            "window done (QNN): sec=${window.size / 16000.0} peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)} chars=${windowText.length}",
+                        )
+                    } else {
+                        val cb = object : TranscriptionCallback {
+                            override fun onProgress(percent: Int) {
+                                val frac = if (totalMs > 0) {
+                                    ((windowStartMs + windowMs * percent / 100.0) / totalMs).coerceIn(0.0, 0.999)
+                                } else {
+                                    0.999
+                                }
+                                bus.update { it.copy(progress = frac.toFloat()) }
+                            }
+
+                            override fun onSegment(startMs: Long, endMs: Long, segText: String): Boolean {
+                                val trimmed = segText.trim()
+                                if (trimmed.isNotEmpty()) {
+                                    segments.add(TranscriptSegment(startMs + windowStartMs, endMs + windowStartMs, trimmed))
+                                    text.append(trimmed).append(' ')
+                                    bus.update { it.copy(partialText = text.toString().trim()) }
+                                }
+                                return true
+                            }
+
+                            override fun shouldContinue(): Boolean = !TranscriptionBus.cancelRequested
+                        }
+
+                        val ok = WhisperEngine.transcribe(ctx, window, s.language, s.translateToEnglish, cb)
+                        val peak = window.maxOf { kotlin.math.abs(it) }
+                        val rms = kotlin.math.sqrt(window.map { it * it }.average().coerceAtLeast(0.0)).toFloat()
+                        Log.i(
+                            TAG,
+                            "window done: sec=${window.size / 16000.0} peak=${"%.3f".format(peak)} rms=${"%.4f".format(rms)} segments=${segments.size} ok=$ok",
+                        )
+                        if (!ok) {
+                            if (TranscriptionBus.cancelRequested) break
+                            throw IOException("Whisper failed to transcribe this audio")
+                        }
                     }
+
                     windowStartMs += windowMs
                     if (totalMs > 0) {
                         bus.update {
@@ -155,7 +210,7 @@ class TranscriptionCoordinator(
                 }
             } finally {
                 decoder.close()
-                WhisperEngine.destroyContext(ctx)
+                if (ctx != 0L) WhisperEngine.destroyContext(ctx)
             }
 
             val processingMs = SystemClock.elapsedRealtime() - startedAt
@@ -163,17 +218,17 @@ class TranscriptionCoordinator(
                 bus.update { it.copy(phase = JobPhase.CANCELLED) }
                 return
             }
-            android.util.Log.i(TAG, "done: segments=${segments.size} chars=${text.length} audioMs=$audioMs")
+            Log.i(TAG, "done: segments=${segments.size} chars=${text.length} audioMs=$audioMs")
 
             val result = TranscriptResult(
                 text = text.toString().trim(),
                 segments = segments.toList(),
                 fileName = displayName,
-                modelId = model.id,
-                modelLabel = model.label,
-                backend = backend.name,
+                modelId = modelId,
+                modelLabel = modelLabel,
+                backend = backend?.name ?: "QNN",
                 language = s.language,
-                audioDurationMs = maxOf(audioMs, windowStartMsCompat(segments)),
+                audioDurationMs = maxOf(audioMs, segments.lastOrNull()?.endMs ?: 0L),
                 processingMs = processingMs,
             )
 
@@ -210,7 +265,7 @@ class TranscriptionCoordinator(
         return DeviceTier.detect(info.totalMem)
     }
 
-    private fun pickBackend(pref: String, model: com.anywhere.transcript.data.ModelInfo): BackendDevice {
+    private fun pickBackend(pref: String, model: ModelInfo): BackendDevice {
         val gpus = WhisperEngine.gpuBackends()
         val npu = gpus.firstOrNull { it.name.startsWith("HTP") || it.name.contains("Hexagon", true) }
         val gpu = gpus.firstOrNull { !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }
@@ -228,9 +283,6 @@ class TranscriptionCoordinator(
     private fun cpuDevice(): BackendDevice =
         WhisperEngine.backends().firstOrNull { it.kind == "cpu" }
             ?: BackendDevice("CPU", "CPU", "cpu")
-
-    private fun windowStartMsCompat(segments: List<TranscriptSegment>): Long =
-        segments.lastOrNull()?.endMs ?: 0L
 
     private companion object {
         const val TAG = "Transcription"

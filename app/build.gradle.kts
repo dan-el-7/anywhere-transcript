@@ -106,6 +106,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
 
+    // v2 QNN engine: ORT with QNN EP + the Qualcomm HTP runtime (libQnnHtp.so + stub/skel libs)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.27.0")
+    implementation("com.qualcomm.qti:qnn-runtime:2.48.0")
+
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
 }

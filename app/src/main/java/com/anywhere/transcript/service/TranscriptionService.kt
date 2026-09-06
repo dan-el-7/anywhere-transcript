@@ -81,7 +81,7 @@ class TranscriptionService : Service() {
                 }
                 val name = intent.getStringExtra(EXTRA_NAME) ?: "audio"
                 startForegroundCompat()
-                coordinator?.start(uri, name)
+                coordinator?.start(uri, name, intent.getStringExtra(EXTRA_BACKEND))
             }
             else -> {
                 stopSelf()
@@ -168,5 +168,6 @@ class TranscriptionService : Service() {
         const val ACTION_START = "com.anywhere.transcript.action.START"
         const val ACTION_CANCEL = "com.anywhere.transcript.action.CANCEL"
         const val EXTRA_NAME = "extra_name"
+        const val EXTRA_BACKEND = "extra_backend"
     }
 }

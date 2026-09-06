@@ -12,6 +12,23 @@ option(WH_ENABLE_HEXAGON
     "Build the experimental ggml-hexagon NPU backend (requires the Qualcomm Hexagon SDK; set HEXAGON_SDK_ROOT env var)"
     OFF)
 
+find_library(LOG_LIB log)
+
+# ---- HTP/QNN engine (ORT C API + QNN EP; MIT, from theedevguy/whisper-htp-android) ----
+# Builds on every ABI — it is independent of the whisper.cpp stack and only
+# dlopens libonnxruntime.so / libQnnHtp.so from the app's native lib dir.
+add_library(whisper_htp SHARED
+    htp/htp_whisper.cpp
+    htp/whisper_mel.cpp
+)
+target_include_directories(whisper_htp PRIVATE htp/ort/include)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    # __fp16 arithmetic for the turbo (fp16) variant's tensors
+    target_compile_options(whisper_htp PRIVATE -march=armv8.2-a+fp16)
+endif()
+target_compile_options(whisper_htp PRIVATE -O3)
+target_link_libraries(whisper_htp ${LOG_LIB} android)
+
 # ---------------------------------------------------------------------------
 # arm64-v8a uses a prebuilt libwhisperjni.so (contains the Hexagon NPU backend,
 # built with the Hexagon SDK — see hexagon-npu-libs/HEXAGON_INTEGRATION.md).
@@ -77,5 +94,5 @@ target_include_directories(whisperjni PRIVATE
     "${WHISPER_SRC_DIR}/ggml/include"
 )
 
-find_library(LOG_LIB log)
+find_library(LOG_LIB2 log)
 target_link_libraries(whisperjni PRIVATE whisper ${LOG_LIB})

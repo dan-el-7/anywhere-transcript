@@ -83,10 +83,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
 
             SectionCard("Compute backend") {
                 RadioRow("Auto — NPU/GPU when available, else CPU", settings.backendPref == "auto") { vm.setBackendPref("auto") }
-                RadioRow("NPU — Hexagon (experimental, Snapdragon 8 Gen 2+)", settings.backendPref == "npu") { vm.setBackendPref("npu") }
+                RadioRow("QNN — Whisper Turbo fp16 on NPU (needs model files)", settings.backendPref == "qnn") { vm.setBackendPref("qnn") }
+                RadioRow("NPU — Hexagon ggml (experimental, Snapdragon 8 Gen 2+)", settings.backendPref == "npu") { vm.setBackendPref("npu") }
                 RadioRow("GPU — OpenCL (Adreno) / Vulkan", settings.backendPref == "gpu") { vm.setBackendPref("gpu") }
                 RadioRow("CPU", settings.backendPref == "cpu") { vm.setBackendPref("cpu") }
-                HelperText("NPU requires a Hexagon-capable Snapdragon and a q8_0 model; it falls back automatically if unavailable.")
+                HelperText("QNN uses Qualcomm AI Hub context binaries (~2.2GB, files/qnn). NPU requires a Hexagon-capable Snapdragon and a q8_0 model; both fall back automatically if unavailable.")
             }
 
             SectionCard("Language") {
