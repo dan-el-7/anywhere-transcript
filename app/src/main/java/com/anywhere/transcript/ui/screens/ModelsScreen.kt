@@ -5,6 +5,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,7 +63,7 @@ private fun backendLabel(name: String, kind: String): String = when {
     else -> name
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -97,18 +99,31 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(pad),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // ---- device info --------------------------------------------------------
             item(key = "device") {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("This device", style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // FlowRow: wraps instead of clipping when several engines are present.
+                        // whisper.cpp always has CPU; QNN runs when the SoC has a
+                        // supported Hexagon DSP (precompiled context binary per arch).
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
                             AssistChip(onClick = {}, label = { Text(tier.label) })
-                            backends.forEach { b ->
-                                AssistChip(onClick = {}, label = { Text(backendLabel(b.name, b.kind)) })
+                            if (backends.isEmpty()) {
+                                AssistChip(onClick = {}, label = { Text("CPU") })
+                            } else {
+                                backends.forEach { b ->
+                                    AssistChip(onClick = {}, label = { Text(backendLabel(b.name, b.kind)) })
+                                }
+                            }
+                            if (myArch != null) {
+                                AssistChip(onClick = {}, label = { Text("QNN · NPU") })
                             }
                         }
                         if (soc != null) {
@@ -135,9 +150,16 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             }
 
             // ---- recommended for this device ----------------------------------------
-            val recommended = ModelCatalog.recommendedFor(tier)
+            // QNN explicitly selected: only context-binary packages can run on the
+            // QNN engine, so the page shows QNN options only.
+            val qnnMode = settings.backendPref == "qnn"
+            val recommended = if (qnnMode) {
+                ModelCatalog.byId["qnn-turbo-$myArch"] ?: ModelCatalog.qnnModels.first()
+            } else {
+                ModelCatalog.recommendedFor(tier)
+            }
             item(key = "recommended") {
-                SectionHeader("For your device", tag = null)
+                SectionHeader(if (qnnMode) "For your NPU" else "For your device", tag = null)
                 RecommendedCard(
                     model = recommended,
                     state = states[recommended.id],
@@ -149,38 +171,17 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 )
             }
 
-            // ---- all models, grouped by tier ----------------------------------------
-            item(key = "hdr-all") {
-                SectionHeader("All models", tag = null)
-            }
-            val npuMode = settings.backendPref == "npu"
-            DeviceTier.entries.forEach { group ->
-                val models = ModelCatalog.forTier(group).let { list ->
-                    if (npuMode) list.sortedWith(compareBy({ !it.id.endsWith("-q8_0") }, { it.sizeBytes }))
-                    else list.sortedBy { it.sizeBytes }
+            if (qnnMode) {
+                // ---- QNN packages only ------------------------------------------
+                item(key = "hdr-qnn") {
+                    SectionHeader("NPU packages (QNN)", tag = null)
                 }
-                item(key = "sub-$group") {
-                    Row(
-                        modifier = Modifier.padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            group.label.substringBefore("·").trim(),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (group == tier) {
-                            AssistChip(onClick = {}, label = { Text("your tier") })
-                        }
-                    }
-                }
-                items(models, key = { it.id }) { model ->
+                items(ModelCatalog.qnnModels, key = { it.id }) { model ->
                     ModelRow(
                         model = model,
                         state = states[model.id],
-                        selected = (settings.modelId ?: ModelCatalog.recommended[tier]) == model.id,
-                        npuSelected = npuMode,
+                        selected = (settings.modelId
+                            ?: ModelCatalog.byId["qnn-turbo-$myArch"]?.id) == model.id,
                         myArch = myArch,
                         myArchLabel = myArchLabel,
                         onDownload = { vm.download(model) },
@@ -188,6 +189,47 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                         onDelete = { vm.deleteModel(model.id) },
                         onSelect = { vm.selectModel(model.id) },
                     )
+                }
+            } else {
+                // ---- all models, grouped by tier ------------------------------------
+                item(key = "hdr-all") {
+                    SectionHeader("All models", tag = null)
+                }
+                val npuMode = settings.backendPref == "npu"
+                DeviceTier.entries.forEach { group ->
+                    val models = ModelCatalog.forTier(group).let { list ->
+                        if (npuMode) list.sortedWith(compareBy({ !it.id.endsWith("-q8_0") }, { it.sizeBytes }))
+                        else list.sortedBy { it.sizeBytes }
+                    }
+                    item(key = "sub-$group") {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                group.label.substringBefore("·").trim(),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (group == tier) {
+                                AssistChip(onClick = {}, label = { Text("your tier") })
+                            }
+                        }
+                    }
+                    items(models, key = { it.id }) { model ->
+                        ModelRow(
+                            model = model,
+                            state = states[model.id],
+                            selected = (settings.modelId ?: ModelCatalog.recommended[tier]) == model.id,
+                            npuSelected = npuMode,
+                            myArch = myArch,
+                            myArchLabel = myArchLabel,
+                            onDownload = { vm.download(model) },
+                            onCancelDownload = { vm.cancelDownload(model.id) },
+                            onDelete = { vm.deleteModel(model.id) },
+                            onSelect = { vm.selectModel(model.id) },
+                        )
+                    }
                 }
             }
 
@@ -198,7 +240,6 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                     "Add a ggml Whisper model from a URL, or import a .bin file from this device. NPU runs q8_0/f32 models only.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
             items(customModels, key = { it.id }) { model ->
@@ -275,10 +316,10 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
 
 @Composable
 private fun SectionHeader(title: String, tag: String?) {
-    Column(Modifier.padding(top = 12.dp)) {
+    Column {
         Text(title, style = MaterialTheme.typography.titleMedium)
         HorizontalDivider(
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = 6.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
         )
     }
@@ -296,9 +337,7 @@ private fun RecommendedCard(
 ) {
     val status = state?.status ?: ModelStatus.NOT_DOWNLOADED
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp),
+        modifier = Modifier.fillMaxWidth(),
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         colors = if (selected) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
         else CardDefaults.cardColors(),

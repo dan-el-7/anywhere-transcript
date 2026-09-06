@@ -136,6 +136,15 @@ thedevguy/whisper-htp-android, MIT). Packages are downloadable in-app and
 extracted to `files/qnn/<arch>/`. Design notes:
 [docs/QNN_V2_PLAN.md](docs/QNN_V2_PLAN.md).
 
+> Why precompiled? Per Qualcomm's [AI Developer Workflow](https://docs.qualcomm.com/doc/80-70029-15B/topic/run-prebuilt-models-and-apps.html)
+> ([ONNX on NPU via ORT](https://docs.qualcomm.com/doc/80-70029-15B/topic/run-an-onnx-model-using-ort.html)),
+> the NPU cannot run a raw float ONNX the way the CPU does — the model must be
+> converted/quantized into a SoC-specific artifact first (a QAIRT `ctx.onnx` /
+> `qairt_context.bin`, or a QDQ-quantized ONNX). That is exactly what the
+> per-arch zips below are: AI Hub compiles Whisper once per Hexagon version in
+> the cloud, and the app downloads the binary matching the phone's chip. A
+> float `.bin`/`.onnx` can never load on the NPU, no matter the runtime.
+
 #### Where the model files actually live
 
 Official listings:
