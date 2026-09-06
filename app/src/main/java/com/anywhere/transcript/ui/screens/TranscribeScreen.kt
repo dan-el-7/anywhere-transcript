@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -136,7 +137,9 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
             if (gpu != null) "GPU (${gpu.name})" else "No GPU driver → CPU"
         settings.backendPref == "cpu" -> "CPU (forced)"
         else -> when {
-            npu != null && selected.id.endsWith("-q8_0") -> "Auto · ${npu.name} NPU"
+            // Direct HTP dispatch is not advertised: per Qualcomm the HTP runs
+            // quantized/precompiled graphs only and app DSP sessions are
+            // OEM-gated, so Auto promises CPU or GPU; the NPU is used via QNN.
             gpu != null -> "Auto · ${gpu.name} GPU"
             else -> "Auto · CPU"
         }
@@ -194,11 +197,21 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
 private fun SetupRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(96.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

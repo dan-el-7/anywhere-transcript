@@ -7,22 +7,23 @@ no accounts, no storage permissions.
 Built with **Kotlin + Jetpack Compose Material 3 Expressive** and
 **whisper.cpp** (v1.9.3) compiled natively via the NDK.
 
-> **Status: NPU support is WIP.** The Hexagon NPU backend ships in the APK but is
-> disabled-by-default on devices whose OEM blocks third-party DSP sessions
-> (see [NPU support (WIP)](#npu-support-wip)). CPU works everywhere; OpenCL works
-> where the OEM exposes the Adreno driver. The app always reports honestly which
-> engine it can actually use.
+> **Status: QNN on the Hexagon NPU works well** (the recommended path on
+> Snapdragon 8 Gen 1 → 8 Elite Gen 5), and CPU works everywhere. NPU-ggml and
+> OpenCL/Vulkan GPU are experimental/iffy — see [NPU support](#npu-support-two-engines).
+> The app always reports honestly which engine it can actually use.
 
 ## Features
 
 - **Share-target**: hit Share on any audio/video file and choose *Anywhere Transcript*,
   or pick a file from the Transcribe tab.
-- **100% on-device inference** with automatic backend negotiation:
-  - **CPU** — works everywhere (including non-Qualcomm SoCs)
-  - **OpenCL GPU** — Adreno-tuned ggml kernels, loaded via `dlopen("libOpenCL.so")`
-  - **Vulkan** — built when available; covers Mali/other GPUs
-  - **Hexagon NPU (experimental)** — whisper.cpp's upstream `ggml-hexagon` backend;
-    see [NPU build](#qualcomm-npu-experimental) below. Disabled by default.
+- **100% on-device inference** — the engine follows the model, with a manual
+  override in *Settings → Compute backend*. Honest maturity levels:
+  | Engine | Status | Notes |
+  |---|---|---|
+  | **QNN (Hexagon NPU)** | ✅ Works well | Whisper Turbo fp16 as precompiled context binaries (~2 GB/arch, 8 Gen 1 → 8 Elite Gen 5); ~7× realtime on-device |
+  | **CPU** | ✅ Works everywhere | Including non-Qualcomm SoCs; slower for large models |
+  | **NPU-ggml (direct Hexagon)** | ❌ Doesn't work directly | The HTP runs quantized/precompiled graphs only — never a raw model ([QNN docs](https://onnxruntime.ai/docs/execution-providers/QNN-ExecutionProvider.html)) — and app DSP sessions are OEM-gated (detection still reports HTP where apps are blocked). Kept as an explicit option; prefer QNN |
+  | **OpenCL / Vulkan GPU** | ⚠️ Opt-in, iffy | Some Adreno drivers abort uncatchably, so OpenCL stays off unless picked |
 - **Three device tiers** (auto-detected from RAM, overridable in Settings):
   | Tier | Recommended model | Size |
   |---|---|---|

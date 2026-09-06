@@ -24,6 +24,8 @@ data class AppSettings(
     val themeMode: String = "system",
     /** First-run model picker already completed (or skipped). */
     val onboardingDone: Boolean = false,
+    /** Hide QNN packages built for other Hexagon archs (can't run here). */
+    val hideIncompatibleModels: Boolean = true,
 )
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
@@ -39,6 +41,7 @@ class SettingsRepository(private val context: Context) {
         val DYNAMIC = booleanPreferencesKey("dynamic_color")
         val THEME = stringPreferencesKey("theme_mode")
         val ONBOARDING = booleanPreferencesKey("onboarding_done")
+        val HIDE_INCOMPATIBLE = booleanPreferencesKey("hide_incompatible_models")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -51,6 +54,7 @@ class SettingsRepository(private val context: Context) {
             dynamicColor = p[Keys.DYNAMIC] ?: true,
             themeMode = p[Keys.THEME] ?: "system",
             onboardingDone = p[Keys.ONBOARDING] ?: false,
+            hideIncompatibleModels = p[Keys.HIDE_INCOMPATIBLE] ?: true,
         )
     }
 
@@ -74,4 +78,5 @@ class SettingsRepository(private val context: Context) {
     suspend fun setDynamicColor(v: Boolean) = context.dataStore.edit { it[Keys.DYNAMIC] = v }
     suspend fun setThemeMode(v: String) = context.dataStore.edit { it[Keys.THEME] = v }
     suspend fun setOnboardingDone(v: Boolean) = context.dataStore.edit { it[Keys.ONBOARDING] = v }
+    suspend fun setHideIncompatibleModels(v: Boolean) = context.dataStore.edit { it[Keys.HIDE_INCOMPATIBLE] = v }
 }

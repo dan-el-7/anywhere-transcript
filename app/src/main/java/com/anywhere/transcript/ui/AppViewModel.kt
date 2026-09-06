@@ -198,6 +198,7 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
     fun setTranslate(v: Boolean) = viewModelScope.launch { graph.settingsRepo.setTranslate(v) }
     fun setDynamicColor(v: Boolean) = viewModelScope.launch { graph.settingsRepo.setDynamicColor(v) }
     fun setThemeMode(v: String) = viewModelScope.launch { graph.settingsRepo.setThemeMode(v) }
+    fun setHideIncompatibleModels(v: Boolean) = viewModelScope.launch { graph.settingsRepo.setHideIncompatibleModels(v) }
 
     // ---- platform ---------------------------------------------------------------
 

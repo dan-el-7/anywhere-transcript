@@ -94,7 +94,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
                 RadioRow("QNN — Whisper Turbo fp16 on NPU (needs model files)", settings.backendPref == "qnn") {
                     if (npuPresent) vm.setBackendPref("qnn") else showBackendWarning = "qnn"
                 }
-                RadioRow("NPU — Hexagon ggml (experimental, Snapdragon 8 Gen 2+)", settings.backendPref == "npu") {
+                RadioRow("NPU — direct Hexagon (rarely works from apps, prefer QNN)", settings.backendPref == "npu") {
                     when {
                         !npuPresent -> showBackendWarning = "npu"
                         !selectedModel.id.endsWith("-q8_0") && !selectedModel.id.startsWith("qnn-turbo") ->
@@ -104,6 +104,21 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
                 }
                 RadioRow("GPU — OpenCL (Adreno) / Vulkan", settings.backendPref == "gpu") { vm.setBackendPref("gpu") }
                 RadioRow("CPU", settings.backendPref == "cpu") { vm.setBackendPref("cpu") }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Hide incompatible models", style = MaterialTheme.typography.bodyLarge)
+                        HelperText("Hides NPU packages built for other chips (on by default).")
+                    }
+                    Switch(
+                        checked = settings.hideIncompatibleModels,
+                        onCheckedChange = { vm.setHideIncompatibleModels(it) },
+                    )
+                }
                 HelperText(
                     "QNN uses Qualcomm AI Hub context binaries (~2.2GB, files/qnn). NPU requires a " +
                         "Hexagon-capable Snapdragon and a q8_0 model; both fall back automatically if unavailable.",

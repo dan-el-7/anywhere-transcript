@@ -103,7 +103,14 @@ class ModelRepository(
 
     private fun archOf(modelId: String): String = modelId.removePrefix("qnn-turbo-")
 
-    fun diskUsageBytes(): Long = dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+    fun diskUsageBytes(): Long {
+        // ggml models live in internal files/models, QNN context binaries in
+        // the *external* files/qnn (see QnnWhisperEngine) — counting only one
+        // of them under-reports by gigabytes.
+        val qnnDir = File(appContext.getExternalFilesDir(null), "qnn")
+        return dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } +
+            qnnDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+    }
 
     fun downloadedModels(): List<ModelInfo> = ModelCatalog.all.filter { isDownloaded(it.id) }
 

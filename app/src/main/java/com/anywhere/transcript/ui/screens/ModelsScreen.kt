@@ -107,9 +107,12 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("This device", style = MaterialTheme.typography.titleMedium)
-                        // FlowRow: wraps instead of clipping when several engines are present.
-                        // whisper.cpp always has CPU; QNN runs when the SoC has a
-                        // supported Hexagon DSP (precompiled context binary per arch).
+                        // Capability row: only engines that actually work from an app.
+                        // Raw HTP is deliberately NOT listed: per Qualcomm, the HTP
+                        // backend runs quantized/precompiled graphs only (never a raw
+                        // float model), and app-UID DSP sessions are OEM-gated —
+                        // detection APIs report HTP even where app sessions are
+                        // blocked. The NPU story here is the QNN chip below.
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -118,9 +121,15 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             if (backends.isEmpty()) {
                                 AssistChip(onClick = {}, label = { Text("CPU") })
                             } else {
-                                backends.forEach { b ->
-                                    AssistChip(onClick = {}, label = { Text(backendLabel(b.name, b.kind)) })
-                                }
+                                backends
+                                    .filter { b ->
+                                        !b.name.startsWith("HTP") &&
+                                            !b.name.contains("Hexagon", true) &&
+                                            b.kind != "accel"
+                                    }
+                                    .forEach { b ->
+                                        AssistChip(onClick = {}, label = { Text(backendLabel(b.name, b.kind)) })
+                                    }
                             }
                             if (myArch != null) {
                                 AssistChip(onClick = {}, label = { Text("QNN · NPU") })
@@ -153,6 +162,15 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             // QNN explicitly selected: only context-binary packages can run on the
             // QNN engine, so the page shows QNN options only.
             val qnnMode = settings.backendPref == "qnn"
+            // "Hide incompatible models" (on by default): drop QNN packages built
+            // for other Hexagon archs — they can never load here. Needs a known
+            // arch; when the chip is unrecognized nothing is proven incompatible.
+            val hideOthers = settings.hideIncompatibleModels && myArch != null
+            val visibleQnn = if (hideOthers) {
+                ModelCatalog.qnnModels.filter { it.qnnArch == myArch }
+            } else {
+                ModelCatalog.qnnModels
+            }
             val recommended = if (qnnMode) {
                 ModelCatalog.byId["qnn-turbo-$myArch"] ?: ModelCatalog.qnnModels.first()
             } else {
@@ -176,7 +194,7 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 item(key = "hdr-qnn") {
                     SectionHeader("NPU packages (QNN)", tag = null)
                 }
-                items(ModelCatalog.qnnModels, key = { it.id }) { model ->
+                items(visibleQnn, key = { it.id }) { model ->
                     ModelRow(
                         model = model,
                         state = states[model.id],
@@ -197,7 +215,9 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 }
                 val npuMode = settings.backendPref == "npu"
                 DeviceTier.entries.forEach { group ->
-                    val models = ModelCatalog.forTier(group).let { list ->
+                    val models = ModelCatalog.forTier(group)
+                        .filter { m -> !hideOthers || m.qnnArch == null || m.qnnArch == myArch }
+                        .let { list ->
                         if (npuMode) list.sortedWith(compareBy({ !it.id.endsWith("-q8_0") }, { it.sizeBytes }))
                         else list.sortedBy { it.sizeBytes }
                     }
