@@ -33,6 +33,10 @@ object QnnWhisperEngine {
             .all { File(d, it).let { f -> f.exists() && f.length() > 0 } }
     }
 
+    fun deleteExtracted(context: Context) {
+        modelDir(context).deleteRecursively()
+    }
+
     fun isInitialized(): Boolean = handle != 0L
 
     /** Prepares assets + opens the QNN sessions. Returns false on failure (see logcat). */

@@ -8,13 +8,19 @@ import org.junit.Test
 class ModelCatalogTest {
 
     @Test
-    fun `ids are unique and files are ggml bins`() {
+    fun `ids are unique and files are ggml bins or qnn packages`() {
         val ids = ModelCatalog.all.map { it.id }
         assertEquals(ids.size, ids.toSet().size)
         ModelCatalog.all.forEach { m ->
-            assertTrue(m.file.startsWith("ggml-") && m.file.endsWith(".bin"))
-            assertTrue(m.url.startsWith("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"))
-            assertTrue(m.url.endsWith(m.file))
+            if (ModelCatalog.isQnnPackage(m.id)) {
+                assertTrue(m.file.endsWith(".zip"))
+                assertTrue(m.url.startsWith("https://qaihub-public-assets.s3.us-west-2.amazonaws.com/"))
+                assertTrue(m.url.endsWith(".zip"))
+            } else {
+                assertTrue(m.file.startsWith("ggml-") && m.file.endsWith(".bin"))
+                assertTrue(m.url.startsWith("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"))
+                assertTrue(m.url.endsWith(m.file))
+            }
             assertTrue(m.sizeBytes > 0)
         }
     }

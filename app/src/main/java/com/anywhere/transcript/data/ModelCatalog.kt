@@ -62,7 +62,31 @@ object ModelCatalog {
         ModelInfo("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 547 * MB, DeviceTier.FLAGSHIP, true, "809M"),
         ModelInfo("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 574 * MB, DeviceTier.FLAGSHIP, true, "1.5B", "Max accuracy · slower"),
         ModelInfo("medium-q8_0", "ggml-medium-q8_0.bin", 786 * MB, DeviceTier.FLAGSHIP, true, "769M", "Slower"),
+        // ---- QNN NPU packages (Whisper-Large-V3-Turbo fp16, Qualcomm AI Hub) ----
+        // Zips contain encoder/decoder ONNX + qairt context binaries; the app
+        // extracts them to files/qnn for the QNN engine. Arch-locked builds.
+        qnnModel("v73", "qualcomm-qcs8550-proxy", 2100),
+        qnnModel("v75", "qualcomm-snapdragon-8gen3", 2150),
+        qnnModel("v79", "qualcomm-snapdragon-8-elite-for-galaxy", 2150),
+        qnnModel("v81", "qualcomm-snapdragon-8-elite-gen5-for-galaxy", 2200),
     )
+
+    /** Qualcomm AI Hub precompiled Whisper-Large-V3-Turbo (fp16) for a Hexagon arch. */
+    private fun qnnModel(arch: String, chipset: String, sizeMB: Long): ModelInfo {
+        val url = "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/" +
+            "qai-hub-models/models/whisper_large_v3_turbo/releases/v0.61.0/" +
+            "whisper_large_v3_turbo-precompiled_qnn_onnx-float-qualcomm_${chipset}.zip"
+        return ModelInfo(
+            id = "qnn-turbo-$arch",
+            file = "qnn-turbo-$arch.zip",
+            sizeBytes = sizeMB * MB,
+            tier = DeviceTier.FLAGSHIP,
+            multilingual = true,
+            params = "809M",
+            note = "NPU · Turbo fp16",
+            explicitUrl = url,
+        )
+    }
 
     val byId: Map<String, ModelInfo> = all.associateBy { it.id }
 
@@ -72,6 +96,9 @@ object ModelCatalog {
         DeviceTier.MID to "small-q8_0",
         DeviceTier.FLAGSHIP to "large-v3-turbo-q8_0",
     )
+
+    /** Detects a QNN context-binary package entry (zip, extracted for the NPU engine). */
+    fun isQnnPackage(modelId: String): Boolean = modelId.startsWith("qnn-turbo")
 
     fun recommendedFor(tier: DeviceTier): ModelInfo = byId.getValue(recommended.getValue(tier))
 

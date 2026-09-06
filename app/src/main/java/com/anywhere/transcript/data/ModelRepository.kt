@@ -1,6 +1,7 @@
 package com.anywhere.transcript.data
 
 import android.content.Context
+import com.anywhere.transcript.engine.QnnWhisperEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -64,6 +65,10 @@ class ModelRepository(
     }
 
     fun isDownloaded(modelId: String): Boolean {
+        if (ModelCatalog.isQnnPackage(modelId)) {
+            // the zip is deleted after extraction; extracted files are the real state
+            return QnnWhisperEngine.modelsReady(appContext)
+        }
         val f = modelFile(modelId)
         return f.exists() && f.length() > 1_000_000
     }
@@ -138,6 +143,10 @@ class ModelRepository(
                         part.copyTo(dst, overwrite = true)
                         part.delete()
                     }
+                    if (ModelCatalog.isQnnPackage(model.id)) {
+                        extractQnnPackage(dst)
+                        dst.delete() // 2GB zip no longer needed once extracted
+                    }
                     setState(model.id) {
                         it.copy(
                             status = ModelStatus.DOWNLOADED,
@@ -169,8 +178,26 @@ class ModelRepository(
         val dst = modelFile(modelId)
         dst.delete()
         File(dir, dst.name + ".part").delete()
+        if (ModelCatalog.isQnnPackage(modelId)) {
+            QnnWhisperEngine.deleteExtracted(appContext)
+        }
         setState(modelId) {
             it.copy(status = ModelStatus.NOT_DOWNLOADED, downloadedBytes = 0, totalBytes = 0, error = null)
+        }
+    }
+
+    /** Extracts encoder/decoder ONNX + qairt context binaries into files/qnn. */
+    private fun extractQnnPackage(zipFile: File) {
+        val outDir = File(appContext.getExternalFilesDir(null), "qnn").apply { mkdirs() }
+        java.util.zip.ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+            while (true) {
+                val entry = zis.nextEntry ?: break
+                val name = entry.name.substringAfterLast('/')
+                if (name in setOf("encoder.onnx", "encoder_qairt_context.bin", "decoder.onnx", "decoder_qairt_context.bin")) {
+                    File(outDir, name).outputStream().use { zis.copyTo(it) }
+                }
+                zis.closeEntry()
+            }
         }
     }
 
