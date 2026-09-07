@@ -120,8 +120,10 @@ class DownloadService : Service() {
         }
         // WifiLock has no timed acquire; bounded instead by the service lifetime
         // (released as soon as no downloads remain) and stopSelf on cancel.
-        wifiLock?.acquire()
-        wakeLock?.acquire(3 * 60 * 60 * 1000L)
+        // acquire() throws SecurityException if WAKE_LOCK is missing — a lock
+        // is an optimization, never worth killing the download service.
+        runCatching { wifiLock?.acquire() }
+        runCatching { wakeLock?.acquire(3 * 60 * 60 * 1000L) }
     }
 
     private fun releaseLocks() {
