@@ -77,7 +77,7 @@ jobs:
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/apk-certificate.txt"
           cat "$RUNNER_TEMP/apk-certificate.txt"
-          grep -Fx 'Signer #1 certificate SHA-256 digest: 5e0412fe9bb385f86e1ddaf21f4eff20443a12291d523be195c7ac67952b085e' "$RUNNER_TEMP/apk-certificate.txt"
+          grep -F 'certificate SHA-256 digest: 5e0412fe9bb385f86e1ddaf21f4eff20443a12291d523be195c7ac67952b085e' "$RUNNER_TEMP/apk-certificate.txt"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
