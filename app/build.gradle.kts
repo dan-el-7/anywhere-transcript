@@ -13,8 +13,8 @@ android {
         applicationId = "com.anywhere.transcript"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.2.5"
+        versionCode = 7
+        versionName = "0.2.6"
 
         // NOTE: no default abiFilters here — see buildTypes. The arm64-v8a
         // libwhisperjni.so comes from jniLibs (prebuilt with the Hexagon SDK,

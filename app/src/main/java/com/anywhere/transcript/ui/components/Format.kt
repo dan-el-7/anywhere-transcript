@@ -29,8 +29,7 @@ object Format {
             diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)} min ago"
             diff < TimeUnit.DAYS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toHours(diff)} h ago"
             diff < TimeUnit.DAYS.toMillis(7) -> "${TimeUnit.MILLISECONDS.toDays(diff)} d ago"
-            else -> android.text.format.DateFormat.getDateFormat(null)?.format(java.util.Date(ms))
-                ?: java.text.DateFormat.getDateInstance().format(java.util.Date(ms))
+            else -> java.text.DateFormat.getDateInstance().format(java.util.Date(ms))
         }
     }
 }
