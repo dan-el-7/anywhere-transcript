@@ -18,3 +18,5 @@ hexagon-npu-libs/arm64-v8a/
 app/schemas/
 *.apk
 *.aab
+*.keystore
+*.jks

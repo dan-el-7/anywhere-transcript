@@ -129,10 +129,11 @@ ADB="D:/IDEs/SDK/platform-tools/adb.exe"
 
 ## Release
 
-```bash
-./gradlew assembleDebug  # or assembleRelease
-gh release create vX.Y.Z app/build/outputs/apk/debug/app-debug.apk --title ... --notes ...
-```
+GitHub Actions publishes versioned APKs from main after all tests and the build pass.
+Increment both version fields in `app/build.gradle.kts` and add
+`docs/releases/v<VERSION>.md` before pushing to main. Do not manually build or
+upload release APKs. See `docs/RELEASING.md` for signing and retry details.
+Keep `ANDROID_DEBUG_KEYSTORE_BASE64` unchanged: v0.2.7 and later must share it.
 
 Past releases: v0.2.0 (NPU working), v0.2.1 (onboarding guards, icon).
 DeviceTier thresholds use marketing-GB normalization (`DeviceTier.detect`,

@@ -6,9 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -36,6 +45,27 @@ jobs:
       - name: Install NDK and CMake
         run: sdkmanager "ndk;30.0.16138531" "cmake;3.22.1"
 
+      - name: Restore persistent signing key
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "Missing persistent signing key; refusing to generate a replacement."; exit 1; }
+          mkdir -p "$HOME/.android"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Read release version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          source = pathlib.Path('app/build.gradle.kts').read_text()
+          version = re.search(r'versionName = "(\d+\.\d+\.\d+)"', source).group(1)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+
       - name: Build + unit tests
         run: |
           ./gradlew testDebugUnitTest assembleDebug --stacktrace
@@ -45,3 +75,37 @@ jobs:
         with:
           name: anywhere-transcript-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Remove runner signing key
+        if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: rm -f "$HOME/.android/debug.keystore"
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: anywhere-transcript-debug
+          path: release-artifact
+
+      - name: Publish new version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; bump versionName and versionCode to publish another update."
+            exit 0
+          fi
+          notes="docs/releases/$tag.md"
+          test -f "$notes" || { echo "Missing release notes: $notes"; exit 1; }
+          gh release create "$tag" release-artifact/app-debug.apk \
+            --target "$GITHUB_SHA" --title "$tag" --notes-file "$notes"
