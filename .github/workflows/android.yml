@@ -51,9 +51,10 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
         run: |
           test -n "$KEYSTORE_BASE64" || { echo "Missing persistent signing key; refusing to generate a replacement."; exit 1; }
-          mkdir -p "$HOME/.android"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
+          signing_file="$RUNNER_TEMP/actions-debug.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_file"
+          chmod 600 "$signing_file"
+          echo "ANDROID_SIGNING_KEYSTORE=$signing_file" >> "$GITHUB_ENV"
 
       - name: Read release version
         id: version
@@ -70,6 +71,14 @@ jobs:
         run: |
           ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
+      - name: Verify published signing identity
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/apk-certificate.txt"
+          cat "$RUNNER_TEMP/apk-certificate.txt"
+          grep -Fx 'Signer #1 certificate SHA-256 digest: 5e0412fe9bb385f86e1ddaf21f4eff20443a12291d523be195c7ac67952b085e' "$RUNNER_TEMP/apk-certificate.txt"
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -79,7 +88,7 @@ jobs:
 
       - name: Remove runner signing key
         if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: rm -f "$HOME/.android/debug.keystore"
+        run: rm -f "$RUNNER_TEMP/actions-debug.keystore"
 
   release:
     needs: build

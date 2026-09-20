@@ -13,8 +13,8 @@ android {
         applicationId = "com.anywhere.transcript"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.2.7"
+        versionCode = 9
+        versionName = "0.2.8"
 
         // NOTE: no default abiFilters here — see buildTypes. The arm64-v8a
         // libwhisperjni.so comes from jniLibs (prebuilt with the Hexagon SDK,
@@ -37,6 +37,17 @@ android {
                     "-DWH_ENABLE_HEXAGON=OFF",
                     "-DGGML_HEXAGON=OFF",
                 )
+            }
+        }
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            System.getenv("ANDROID_SIGNING_KEYSTORE")?.let { path ->
+                storeFile = file(path)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
             }
         }
     }

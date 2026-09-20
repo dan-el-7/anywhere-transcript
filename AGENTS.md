@@ -133,7 +133,7 @@ GitHub Actions publishes versioned APKs from main after all tests and the build 
 Increment both version fields in `app/build.gradle.kts` and add
 `docs/releases/v<VERSION>.md` before pushing to main. Do not manually build or
 upload release APKs. See `docs/RELEASING.md` for signing and retry details.
-Keep `ANDROID_DEBUG_KEYSTORE_BASE64` unchanged: v0.2.7 and later must share it.
+Keep `ANDROID_DEBUG_KEYSTORE_BASE64` unchanged: v0.2.8 and later must share it.
 
 Past releases: v0.2.0 (NPU working), v0.2.1 (onboarding guards, icon).
 DeviceTier thresholds use marketing-GB normalization (`DeviceTier.detect`,

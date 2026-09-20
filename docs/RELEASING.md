@@ -6,4 +6,4 @@ To ship an update, increment both `versionCode` and `versionName`, add `docs/rel
 
 Keep the signing secret unchanged. Replacing it breaks in-place upgrades. The keystore uses alias `androiddebugkey` and Android's standard debug store/key password `android`; the private keystore itself must remain secret. Missing signing secrets fail the main build instead of silently generating a new key. Retain an encrypted backup of the keystore outside the repository.
 
-v0.2.7 starts the persistent signing-key lineage. Earlier APKs used different keys and require a data-preserving migration or a backed-up reinstall.
+v0.2.8 starts the persistent signing-key lineage. Earlier APKs used different keys and require a data-preserving migration or a backed-up reinstall.
