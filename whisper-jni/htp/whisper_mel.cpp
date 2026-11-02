@@ -105,7 +105,9 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeMel(JNIEnv* env, jobject,
         LOGE("nativeMelInit not called");
         return nullptr;
     }
+    if (!jPcm) return nullptr;
     jsize n = env->GetArrayLength(jPcm);
+    if (n <= 0) return nullptr;
     if (n > SAMPLES_30S) n = SAMPLES_30S;
 
     // Zero-pad to 30s, then reflect-pad n_fft/2 for center=True.

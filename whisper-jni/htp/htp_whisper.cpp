@@ -239,7 +239,7 @@ extern "C" JNIEXPORT jintArray JNICALL
 Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
     JNIEnv* env, jobject, jlong jh, jshortArray jMel, jintArray jPrompt, jfloatArray jMetrics) {
     auto* h = reinterpret_cast<Handle*>(jh);
-    if (!h) return nullptr;
+    if (!h || !jMel || !jPrompt) return nullptr;
     const OrtApi* api = h->api;
     const ModelCfg& cfg = h->cfg;
     const int L = cfg.layers;
@@ -286,6 +286,7 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
 
     // ------------------------------------------------------------- decoder
     jsize promptLen = env->GetArrayLength(jPrompt);
+    if (promptLen <= 0) return nullptr;
     std::vector<int32_t> prompt(promptLen);
     env->GetIntArrayRegion(jPrompt, 0, promptLen, prompt.data());
 
@@ -389,7 +390,11 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
             std::vector<OrtValue*> outs(1 + 2 * L, nullptr);
             st = api->Run(h->dec, nullptr, inNames.data(), (const OrtValue* const*)inVals.data(),
                           inVals.size(), outNamesC.data(), outNamesC.size(), outs.data());
-            if (!check(api, st, "decoder Run")) { ok = false; break; }
+            if (!check(api, st, "decoder Run")) {
+                for (auto* o : outs) if (o) api->ReleaseValue(o);
+                ok = false;
+                break;
+            }
             steps++;
 
             for (int i = 0; i < 2 * L; i++) {
@@ -452,10 +457,18 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
             }
             if (h->cb.shouldContinue) {
                 ScopedAttach sa;
-                if (!sa.env) { ok = false; break; }
+                if (!sa.env) {
+                    for (auto* o : outs) if (o) api->ReleaseValue(o);
+                    ok = false;
+                    break;
+                }
                 jboolean cont = sa.env->CallBooleanMethod(h->cb.listener, h->cb.shouldContinue);
                 if (sa.env->ExceptionCheck()) { sa.env->ExceptionClear(); cont = JNI_TRUE; }
-                if (cont != JNI_TRUE) { ok = false; break; }
+                if (cont != JNI_TRUE) {
+                    for (auto* o : outs) if (o) api->ReleaseValue(o);
+                    ok = false;
+                    break;
+                }
             }
             if (h->cb.onPartial && (step % 8 == 7 || step == promptLen)) {
                 ScopedAttach sa;

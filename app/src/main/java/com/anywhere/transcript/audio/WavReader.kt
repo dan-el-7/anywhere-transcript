@@ -47,9 +47,22 @@ object WavReader {
                         val channels = readLeShort(fmt, 2).toInt()
                         val sampleRate = readLeInt(fmt, 4)
                         val bits = readLeShort(fmt, 14).toInt()
-                        if (channels <= 0 || sampleRate <= 0 || bits % 8 != 0) return null
+                        if (channels <= 0 || sampleRate <= 0 || bits <= 0 || bits % 8 != 0) return null
                         val isFloat = audioFormat == 3 || (audioFormat == 0xFFFE && bits == 32)
                         if (audioFormat != 1 && audioFormat != 3 && audioFormat != 0xFFFE) return null
+                        if (chunkSize > fmt.size) {
+                            val remaining = chunkSize - fmt.size
+                            var skipped = 0L
+                            val buf = ByteArray(4096)
+                            while (skipped < remaining) {
+                                val n = input.read(buf, 0, minOf(buf.size.toLong(), remaining - skipped).toInt())
+                                if (n < 0) return null
+                                skipped += n
+                            }
+                        }
+                        if (chunkSize % 2L != 0L) {
+                            input.read() // RIFF word-alignment pad byte
+                        }
                         header = Header(sampleRate, channels, bits, isFloat, 0, 0)
                     }
                     "data" -> {
@@ -67,6 +80,9 @@ object WavReader {
                             if (n < 0) return null
                             skipped += n
                         }
+                        if (chunkSize % 2L != 0L) {
+                            input.read() // RIFF word-alignment pad byte
+                        }
                     }
                 }
             }
@@ -79,6 +95,7 @@ object WavReader {
     /** Decodes at most [frames] frames from a data stream into mono floats. */
     fun decodeChunk(header: Header, input: InputStream, frames: Int): FloatArray {
         val bytesPerFrame = header.bytesPerFrame
+        if (bytesPerFrame <= 0 || frames <= 0) return FloatArray(0)
         val toRead = frames * bytesPerFrame
         val bytes = ByteArray(toRead)
         val total = input.readNBytesCompat(bytes, toRead)

@@ -57,17 +57,21 @@ object QnnWhisperEngine {
     @Volatile
     var cancelCheck: () -> Boolean = { false }
 
-    private var emitted = 0
+    private var lastDecodedText = ""
 
     private val listener = object : HtpWhisper.Listener {
         override fun onPartial(ids: IntArray): Boolean {
             if (cancelCheck()) return false
-            if (ids.size > emitted) {
-                val v = vocab ?: return true
-                val full = v.decode(ids).trim()
-                val partial = full.substring(minOf(emitted, full.length))
-                if (partial.isNotEmpty()) partialSink?.invoke(partial)
-                emitted = ids.size
+            val v = vocab ?: return true
+            val full = v.decode(ids)
+            if (full.length > lastDecodedText.length) {
+                val delta = if (full.startsWith(lastDecodedText)) {
+                    full.substring(lastDecodedText.length)
+                } else {
+                    full.removePrefix(lastDecodedText)
+                }
+                if (delta.isNotEmpty()) partialSink?.invoke(delta)
+                lastDecodedText = full
             }
             return true
         }
@@ -187,7 +191,7 @@ object QnnWhisperEngine {
         }
         val v = vocab ?: return ""
 
-        emitted = 0
+        lastDecodedText = ""
         partialSink = onPartialText
         cancelCheck = isCancelled
 

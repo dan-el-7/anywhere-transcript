@@ -205,7 +205,8 @@ class TranscriptionCoordinator(
                             translate = s.translateToEnglish,
                             onPartialText = { delta ->
                                 streamed += delta
-                                bus.update { it.copy(partialText = streamed.trim()) }
+                                val currentText = if (text.isEmpty()) streamed.trim() else "${text.toString().trim()} ${streamed.trim()}"
+                                bus.update { it.copy(partialText = currentText) }
                             },
                             isCancelled = { TranscriptionBus.cancelRequested },
                         )

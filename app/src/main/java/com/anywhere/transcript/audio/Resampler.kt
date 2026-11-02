@@ -55,7 +55,11 @@ class RateConverter(private val fromRate: Int, private val toRate: Int) {
 
     /** Flushes everything still convertible; call once at end of stream. */
     fun flush(): FloatArray {
-        val out = process(FloatArray(0))
+        if (buf.isEmpty() || fromRate == toRate) {
+            buf = FloatArray(0)
+            return FloatArray(0)
+        }
+        val out = process(floatArrayOf(buf.last()))
         buf = FloatArray(0)
         return out
     }

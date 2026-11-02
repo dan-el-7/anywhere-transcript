@@ -87,7 +87,11 @@ fun HistoryScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             title = { Text(entry.fileName) },
             text = {
                 SelectionContainer {
-                    Text(entry.text, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        entry.text,
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             },
             confirmButton = {

@@ -87,9 +87,13 @@ class MainActivity : ComponentActivity() {
 
         // Copy immediately: share permissions on the source Uri can be transient.
         lifecycleScope.launch(Dispatchers.IO) {
+            val dir = File(cacheDir, "inbox").apply { mkdirs() }
+            runCatching {
+                val dayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+                dir.listFiles()?.filter { it.lastModified() < dayAgo }?.forEach { it.delete() }
+            }
             val name = displayName(this@MainActivity, source) ?: "audio_${System.currentTimeMillis()}"
             val safeName = name.replace(Regex("[^A-Za-z0-9._ ()-]"), "_")
-            val dir = File(cacheDir, "inbox").apply { mkdirs() }
             val dst = File(dir, "${System.currentTimeMillis()}_$safeName")
             val copied = runCatching {
                 contentResolver.openInputStream(source)?.use { input ->

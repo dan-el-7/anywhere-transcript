@@ -193,6 +193,7 @@ class LiveRecordingSession(
             val srcBuf = ShortArray(2048)
 
             recorder.startRecording()
+            var transcribingJob: Job? = null
             while (!stopping.get()) {
                 val n = recorder.read(srcBuf, 0, srcBuf.size)
                 if (n <= 0) continue
@@ -215,12 +216,20 @@ class LiveRecordingSession(
                     windowFill += take
                     fo += take
                     if (windowFill == window.size) {
-                        transcribeChunk(window.copyOf(), ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
+                        val chunkToTranscribe = window.copyOf()
                         windowFill = 0
+                        // Keep AudioRecord loop non-blocking; transcription runs in background
+                        if (transcribingJob?.isActive != true) {
+                            transcribingJob = scope.launch(Dispatchers.Default) {
+                                transcribeChunk(chunkToTranscribe, ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
+                            }
+                        }
                     }
                 }
                 _state.update { it.copy(elapsedMs = SystemClock.elapsedRealtime() - startedAt) }
             }
+
+            transcribingJob?.join()
 
             // ---- tail (partial window) as the final live chunk
             if (windowFill > 0) {
@@ -266,6 +275,7 @@ class LiveRecordingSession(
     private fun transcribeChunk(chunk: ShortArray, ctxHandle: Long, useQnn: Boolean, language: String, translate: Boolean) {
         if (chunk.isEmpty()) return
         runCatching {
+            val baseText = _state.value.liveText.trim()
             if (useQnn) {
                 val pcm = FloatArray(chunk.size) { j -> chunk[j] / 32768f }
                 var streamed = ""
@@ -276,11 +286,13 @@ class LiveRecordingSession(
                     translate = translate,
                     onPartialText = { delta ->
                         streamed += delta
-                        _state.update { st -> st.copy(liveText = st.liveText + streamed) }
+                        val currentText = if (baseText.isEmpty()) streamed.trim() else "$baseText ${streamed.trim()}"
+                        _state.update { st -> st.copy(liveText = currentText) }
                     },
                 )
                 if (text.isNotBlank()) {
-                    _state.update { st -> st.copy(liveText = st.liveText + " " + text) }
+                    val finalText = if (baseText.isEmpty()) text.trim() else "$baseText ${text.trim()}"
+                    _state.update { st -> st.copy(liveText = finalText) }
                 }
             } else if (ctxHandle != 0L) {
                 val pcm = FloatArray(chunk.size) { j -> chunk[j] / 32768f }
@@ -294,8 +306,10 @@ class LiveRecordingSession(
                     override fun shouldContinue(): Boolean = true
                 }
                 WhisperEngine.transcribe(ctxHandle, pcm, language, translate, cb)
-                if (sb.isNotBlank()) {
-                    _state.update { st -> st.copy(liveText = st.liveText + " " + sb.toString().trim()) }
+                val chunkText = sb.toString().trim()
+                if (chunkText.isNotBlank()) {
+                    val finalText = if (baseText.isEmpty()) chunkText else "$baseText $chunkText"
+                    _state.update { st -> st.copy(liveText = finalText) }
                 }
             }
         }.onFailure { Log.w(TAG, "live chunk failed: ${it.message}") }

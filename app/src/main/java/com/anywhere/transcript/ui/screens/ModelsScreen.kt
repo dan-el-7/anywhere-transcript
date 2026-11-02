@@ -181,7 +181,7 @@ fun ModelsScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 RecommendedCard(
                     model = recommended,
                     state = states[recommended.id],
-                    selected = (settings.modelId ?: ModelCatalog.recommended[tier]) == recommended.id,
+                    selected = (settings.modelId ?: if (qnnMode) recommended.id else ModelCatalog.recommended[tier]) == recommended.id,
                     onDownload = { vm.download(recommended) },
                     onCancelDownload = { vm.cancelDownload(recommended.id) },
                     onDelete = { vm.deleteModel(recommended.id) },

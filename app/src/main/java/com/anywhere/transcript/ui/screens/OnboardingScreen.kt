@@ -64,7 +64,7 @@ fun OnboardingScreen(vm: AppViewModel) {
 
     // "pick the ideal model and it downloads": the recommended option starts
     // downloading on its own; other cards download via their own button
-    val autoStarted = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    val autoStarted = remember { mutableSetOf<String>() }
     LaunchedEffect(tier) {
         options.firstOrNull()?.let { first ->
             if (autoStarted.add(first.id)) vm.download(first)

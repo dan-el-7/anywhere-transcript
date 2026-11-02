@@ -89,8 +89,12 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
 
     fun requestTranscribe(uri: Uri, displayName: String, backendOverride: String? = null) {
         val model = graph.modelRepo.selectedOrDefault(settings.value, effectiveTier.value)
-        val usesWhisper = backendOverride == null || backendOverride == "auto"
-        if (usesWhisper && model == null) {
+        val hexArch = com.anywhere.transcript.data.Hexagon.deviceArch()
+        val qnnReadyHere = hexArch != null && com.anywhere.transcript.engine.QnnWhisperEngine.modelsReady(getApplication(), hexArch)
+        val willUseQnn = backendOverride == "qnn" ||
+            model?.id?.startsWith("qnn-turbo") == true ||
+            (settings.value.backendPref == "qnn" && qnnReadyHere)
+        if (!willUseQnn && model == null) {
             // Nothing usable on the whisper.cpp engine: fail visibly instead of
             // starting a service that would sit stuck in IDLE forever.
             TranscriptionBus.update {
