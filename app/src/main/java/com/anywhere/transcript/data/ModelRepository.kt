@@ -79,7 +79,8 @@ class ModelRepository(
         // every entry and a wholesale reset would hide a running download.
         _states.update { cur ->
             val out = cur.toMutableMap()
-            val all = ModelCatalog.all + (customModels?.all?.value ?: emptyList())
+            val custom = customModels?.entries?.value?.map { it.toModelInfo() } ?: emptyList()
+            val all = ModelCatalog.all + custom
             all.filter { isDownloaded(it.id) }
                 .forEach { m ->
                     val st = cur[m.id]
@@ -114,7 +115,7 @@ class ModelRepository(
 
     fun downloadedModels(): List<ModelInfo> {
         val builtIn = ModelCatalog.all.filter { isDownloaded(it.id) }
-        val custom = customModels?.all?.value?.filter { isDownloaded(it.id) } ?: emptyList()
+        val custom = customModels?.entries?.value?.map { it.toModelInfo() }?.filter { isDownloaded(it.id) } ?: emptyList()
         return builtIn + custom
     }
 
@@ -125,7 +126,7 @@ class ModelRepository(
     fun selectedOrDefault(settings: AppSettings, tier: DeviceTier): ModelInfo? {
         settings.modelId?.let { id ->
             if (id.startsWith("custom-")) {
-                customModels?.all?.value?.firstOrNull { it.id == id }?.let {
+                customModels?.find(id)?.toModelInfo()?.let {
                     if (isDownloaded(it.id)) return it
                 }
             }

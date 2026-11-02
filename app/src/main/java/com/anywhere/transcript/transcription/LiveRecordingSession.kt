@@ -152,6 +152,8 @@ class LiveRecordingSession(
         var recorder: AudioRecord? = null
         val wavFile = File(context.cacheDir, "rec_${System.currentTimeMillis()}.wav")
         var wav: WavWriter? = null
+        var transcribingJob: Job? = null
+        var chunkChannel: Channel<ShortArray>? = null
 
         try {
             val s = settingsRepo.current()
@@ -194,9 +196,10 @@ class LiveRecordingSession(
             var windowFill = 0
             val srcBuf = ShortArray(2048)
 
-            val chunkChannel = Channel<ShortArray>(Channel.UNLIMITED)
-            var transcribingJob: Job? = scope.launch(Dispatchers.Default) {
-                for (chunk in chunkChannel) {
+            val channel = Channel<ShortArray>(Channel.UNLIMITED)
+            chunkChannel = channel
+            transcribingJob = scope.launch(Dispatchers.Default) {
+                for (chunk in channel) {
                     if (stopping.get()) break
                     transcribeChunk(chunk, ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
                 }
@@ -225,7 +228,7 @@ class LiveRecordingSession(
                     windowFill += take
                     fo += take
                     if (windowFill == window.size) {
-                        chunkChannel.trySend(window.copyOf())
+                        channel.trySend(window.copyOf())
                         windowFill = 0
                     }
                 }
@@ -234,7 +237,7 @@ class LiveRecordingSession(
 
             // Immediately stop hardware recorder once stop is requested
             runCatching { recorder.stop() }
-            chunkChannel.close()
+            channel.close()
 
             // Flush resampler tail
             val flushed = resampler.flush()
