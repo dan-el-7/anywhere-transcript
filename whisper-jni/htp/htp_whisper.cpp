@@ -183,10 +183,12 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_anywhere_transcript_engine_HtpWhisper_nativeInit(
     JNIEnv* env, jobject, jstring jLibDir, jstring jEncPath, jstring jDecPath, jint variant,
     jobject listener) {
+    if (!jLibDir || !jEncPath || !jDecPath) return 0;
     const char* c;
-    c = env->GetStringUTFChars(jLibDir, nullptr);  std::string libDir = c;  env->ReleaseStringUTFChars(jLibDir, c);
-    c = env->GetStringUTFChars(jEncPath, nullptr); std::string encPath = c; env->ReleaseStringUTFChars(jEncPath, c);
-    c = env->GetStringUTFChars(jDecPath, nullptr); std::string decPath = c; env->ReleaseStringUTFChars(jDecPath, c);
+    c = env->GetStringUTFChars(jLibDir, nullptr);  std::string libDir = c ? c : "";  if (c) env->ReleaseStringUTFChars(jLibDir, c);
+    c = env->GetStringUTFChars(jEncPath, nullptr); std::string encPath = c ? c : ""; if (c) env->ReleaseStringUTFChars(jEncPath, c);
+    c = env->GetStringUTFChars(jDecPath, nullptr); std::string decPath = c ? c : ""; if (c) env->ReleaseStringUTFChars(jDecPath, c);
+    if (libDir.empty() || encPath.empty() || decPath.empty()) return 0;
 
     auto* h = new Handle();
     h->cfg = (variant == 1) ? CFG_TURBO : CFG_SMALL;
@@ -240,6 +242,8 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
     JNIEnv* env, jobject, jlong jh, jshortArray jMel, jintArray jPrompt, jfloatArray jMetrics) {
     auto* h = reinterpret_cast<Handle*>(jh);
     if (!h || !jMel || !jPrompt) return nullptr;
+    jsize promptLen = env->GetArrayLength(jPrompt);
+    if (promptLen <= 0 || promptLen >= WINDOW - 1) return nullptr;
     const OrtApi* api = h->api;
     const ModelCfg& cfg = h->cfg;
     const int L = cfg.layers;
@@ -285,8 +289,6 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
     LOGI("encoder: %.1f ms on HTP", encMs);
 
     // ------------------------------------------------------------- decoder
-    jsize promptLen = env->GetArrayLength(jPrompt);
-    if (promptLen <= 0) return nullptr;
     std::vector<int32_t> prompt(promptLen);
     env->GetIntArrayRegion(jPrompt, 0, promptLen, prompt.data());
 
@@ -317,37 +319,32 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
     int64_t posShape[] = {1};
 
     std::vector<OrtValue*> inVals;
+    std::vector<OrtValue*> localTensors;
     bool ok = true;
-    OrtValue* val = nullptr;
-    ok = ok && check(api, api->CreateTensorWithDataAsOrtValue(h->mem, &h->inputId, 4, idShape, 2,
-                                                              ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32, &val),
-                     "input_ids tensor");
-    inVals.push_back(val);
-    ok = ok && check(api, api->CreateTensorWithDataAsOrtValue(h->mem, h->mask, WINDOW * 2, maskShape, 4,
-                                                              h->actType(), &val),
-                     "mask tensor");
-    inVals.push_back(val);
+
+    auto addLocalTensor = [&](void* data, size_t bytes, const int64_t* shape, size_t dim,
+                              ONNXTensorElementDataType type, const char* name) -> bool {
+        OrtValue* val = nullptr;
+        if (!check(api, api->CreateTensorWithDataAsOrtValue(h->mem, data, bytes, shape, dim, type, &val), name) || !val) {
+            return false;
+        }
+        localTensors.push_back(val);
+        inVals.push_back(val);
+        return true;
+    };
+
+    ok = ok && addLocalTensor(&h->inputId, 4, idShape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32, "input_ids tensor");
+    ok = ok && addLocalTensor(h->mask, WINDOW * 2, maskShape, 4, h->actType(), "mask tensor");
     for (int i = 0; i < L && ok; i++) {
-        ok = ok && check(api,
-                         api->CreateTensorWithDataAsOrtValue(h->mem, h->selfKV[2 * i].data(),
-                                                             h->kvBytes(), kShape, 4, h->kvType(), &val),
-                         "self k tensor");
-        inVals.push_back(val);
-        ok = ok && check(api,
-                         api->CreateTensorWithDataAsOrtValue(h->mem, h->selfKV[2 * i + 1].data(),
-                                                             h->kvBytes(), vShape, 4, h->kvType(), &val),
-                         "self v tensor");
-        inVals.push_back(val);
+        ok = ok && addLocalTensor(h->selfKV[2 * i].data(), h->kvBytes(), kShape, 4, h->kvType(), "self k tensor");
+        ok = ok && addLocalTensor(h->selfKV[2 * i + 1].data(), h->kvBytes(), vShape, 4, h->kvType(), "self v tensor");
     }
     if (ok) {
         for (int i = 0; i < L; i++) {
             inVals.push_back(h->cross[i]);      // k_cache_cross_i
             inVals.push_back(h->cross[L + i]);  // v_cache_cross_i
         }
-        ok = check(api, api->CreateTensorWithDataAsOrtValue(h->mem, &h->positionId, 4, posShape, 1,
-                                                            ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32, &val),
-                   "position_ids tensor");
-        inVals.push_back(val);
+        ok = ok && addLocalTensor(&h->positionId, 4, posShape, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32, "position_ids tensor");
     }
 
     std::vector<std::string> outNameStore;
@@ -397,17 +394,32 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
             }
             steps++;
 
+            bool kvOk = true;
             for (int i = 0; i < 2 * L; i++) {
                 void* data = nullptr;
-                api->GetTensorMutableData(outs[1 + i], &data);
+                OrtStatus* kvSt = api->GetTensorMutableData(outs[1 + i], &data);
+                if (!check(api, kvSt, "decoder get kv data") || !data) {
+                    kvOk = false;
+                    break;
+                }
                 memcpy(h->selfKV[i].data(), data, h->kvBytes());
+            }
+            if (!kvOk) {
+                for (auto* o : outs) if (o) api->ReleaseValue(o);
+                ok = false;
+                break;
             }
 
             // Whisper's no-speech signal lives in the logits at the
             // start-of-transcript position (step 0 feeds <|startoftranscript|>).
             if (step == 0) {
                 void* ldata = nullptr;
-                api->GetTensorMutableData(outs[0], &ldata);
+                OrtStatus* logSt = api->GetTensorMutableData(outs[0], &ldata);
+                if (!check(api, logSt, "decoder get step 0 logits") || !ldata) {
+                    for (auto* o : outs) if (o) api->ReleaseValue(o);
+                    ok = false;
+                    break;
+                }
                 auto* logits = static_cast<uint16_t*>(ldata);
                 double denom = 0, lns = 0, langDenom = 0, langPt = 0, langEn = 0;
                 if (cfg.fp16) {
@@ -477,15 +489,25 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
                     if (arr) {
                         if (!generated.empty())
                             sa.env->SetIntArrayRegion(arr, 0, (jsize)generated.size(), generated.data());
-                        sa.env->CallBooleanMethod(h->cb.listener, h->cb.onPartial, arr);
-                        if (sa.env->ExceptionCheck()) sa.env->ExceptionClear();
+                        jboolean cont = sa.env->CallBooleanMethod(h->cb.listener, h->cb.onPartial, arr);
+                        if (sa.env->ExceptionCheck()) { sa.env->ExceptionClear(); cont = JNI_TRUE; }
                         sa.env->DeleteLocalRef(arr);
+                        if (cont != JNI_TRUE) {
+                            for (auto* o : outs) if (o) api->ReleaseValue(o);
+                            ok = false;
+                            break;
+                        }
                     }
                 }
             }
             if (step >= promptLen - 1) {
                 void* ldata = nullptr;
-                api->GetTensorMutableData(outs[0], &ldata);
+                OrtStatus* logSt = api->GetTensorMutableData(outs[0], &ldata);
+                if (!check(api, logSt, "decoder get step logits") || !ldata) {
+                    for (auto* o : outs) if (o) api->ReleaseValue(o);
+                    ok = false;
+                    break;
+                }
                 int best = 0;
                 if (cfg.fp16) {
                     auto* logits = static_cast<uint16_t*>(ldata);
@@ -519,9 +541,8 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
         decTotalMs = (ts1.tv_sec - ts0.tv_sec) * 1e3 + (ts1.tv_nsec - ts0.tv_nsec) / 1e6;
     }
 
-    for (size_t i = 0; i < inVals.size(); i++) {
-        bool isCross = i >= (size_t)(2 + 2 * L) && i < (size_t)(2 + 4 * L);
-        if (!isCross && inVals[i]) api->ReleaseValue(inVals[i]);
+    for (auto* t : localTensors) {
+        if (t) api->ReleaseValue(t);
     }
     if (!ok) return nullptr;
 
@@ -542,8 +563,10 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeTranscribe(
         env->SetFloatArrayRegion(jMetrics, 3, 1, &enProb);
     }
 
-    jintArray result = env->NewIntArray(generated.size());
-    env->SetIntArrayRegion(result, 0, generated.size(), generated.data());
+    jintArray result = env->NewIntArray((jsize)generated.size());
+    if (result && !generated.empty()) {
+        env->SetIntArrayRegion(result, 0, (jsize)generated.size(), generated.data());
+    }
     return result;
 }
 

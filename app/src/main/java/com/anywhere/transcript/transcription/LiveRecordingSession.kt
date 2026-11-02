@@ -18,6 +18,8 @@ import com.anywhere.transcript.engine.WhisperEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -166,7 +168,7 @@ class LiveRecordingSession(
             val minBuf = AudioRecord.getMinBufferSize(
                 SRC_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
             )
-            val bufSize = maxOf(minBuf, SRC_RATE) // ≥ 1 s of audio
+            val bufSize = maxOf(minBuf, SRC_RATE * 2 * 2) // ≥ 2 s of audio
             recorder = try {
                 AudioRecord(
                     MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -192,8 +194,15 @@ class LiveRecordingSession(
             var windowFill = 0
             val srcBuf = ShortArray(2048)
 
+            val chunkChannel = Channel<ShortArray>(Channel.UNLIMITED)
+            var transcribingJob: Job? = scope.launch(Dispatchers.Default) {
+                for (chunk in chunkChannel) {
+                    if (stopping.get()) break
+                    transcribeChunk(chunk, ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
+                }
+            }
+
             recorder.startRecording()
-            var transcribingJob: Job? = null
             while (!stopping.get()) {
                 val n = recorder.read(srcBuf, 0, srcBuf.size)
                 if (n <= 0) continue
@@ -216,23 +225,40 @@ class LiveRecordingSession(
                     windowFill += take
                     fo += take
                     if (windowFill == window.size) {
-                        val chunkToTranscribe = window.copyOf()
+                        chunkChannel.trySend(window.copyOf())
                         windowFill = 0
-                        // Keep AudioRecord loop non-blocking; transcription runs in background
-                        if (transcribingJob?.isActive != true) {
-                            transcribingJob = scope.launch(Dispatchers.Default) {
-                                transcribeChunk(chunkToTranscribe, ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
-                            }
-                        }
                     }
                 }
                 _state.update { it.copy(elapsedMs = SystemClock.elapsedRealtime() - startedAt) }
             }
 
-            transcribingJob?.join()
+            // Immediately stop hardware recorder once stop is requested
+            runCatching { recorder.stop() }
+            chunkChannel.close()
 
-            // ---- tail (partial window) as the final live chunk
-            if (windowFill > 0) {
+            // Flush resampler tail
+            val flushed = resampler.flush()
+            if (flushed.isNotEmpty()) {
+                val tailPcm = ShortArray(flushed.size) {
+                    (flushed[it] * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+                }
+                wav.write(tailPcm)
+                var fo = 0
+                while (fo < tailPcm.size) {
+                    val space = window.size - windowFill
+                    val take = minOf(space, tailPcm.size - fo)
+                    System.arraycopy(tailPcm, fo, window, windowFill, take)
+                    windowFill += take
+                    fo += take
+                }
+            }
+
+            // Stop background worker before releasing native resources
+            transcribingJob?.cancelAndJoin()
+            transcribingJob = null
+
+            // ---- tail (partial window) as the final live chunk (if not cancelled)
+            if (windowFill > 0 && !stopping.get()) {
                 transcribeChunk(window.copyOf(windowFill), ctxHandle, useQnn, s.language.ifBlank { "auto" }, s.translateToEnglish)
             }
             if (warmCtx != 0L) {
@@ -258,7 +284,9 @@ class LiveRecordingSession(
             _state.update { it.copy(recording = false, error = t.message ?: t.javaClass.simpleName) }
         } finally {
             runCatching { wav?.close() }
+            runCatching { recorder?.stop() }
             runCatching { recorder?.release() }
+            transcribingJob?.cancel()
             // any path that escapes the loop (exception before stop) must
             // still release the preloaded whisper.cpp context
             if (warmCtx != 0L) {
@@ -278,17 +306,16 @@ class LiveRecordingSession(
             val baseText = _state.value.liveText.trim()
             if (useQnn) {
                 val pcm = FloatArray(chunk.size) { j -> chunk[j] / 32768f }
-                var streamed = ""
                 val text = QnnWhisperEngine.transcribeWindow(
                     context,
                     pcm,
                     language,
                     translate = translate,
-                    onPartialText = { delta ->
-                        streamed += delta
-                        val currentText = if (baseText.isEmpty()) streamed.trim() else "$baseText ${streamed.trim()}"
+                    onPartialText = { chunkText ->
+                        val currentText = if (baseText.isEmpty()) chunkText.trim() else "$baseText ${chunkText.trim()}"
                         _state.update { st -> st.copy(liveText = currentText) }
                     },
+                    isCancelled = { stopping.get() },
                 )
                 if (text.isNotBlank()) {
                     val finalText = if (baseText.isEmpty()) text.trim() else "$baseText ${text.trim()}"
@@ -303,7 +330,7 @@ class LiveRecordingSession(
                         if (text.isNotBlank()) sb.append(text.trim()).append(' ')
                         return true
                     }
-                    override fun shouldContinue(): Boolean = true
+                    override fun shouldContinue(): Boolean = !stopping.get()
                 }
                 WhisperEngine.transcribe(ctxHandle, pcm, language, translate, cb)
                 val chunkText = sb.toString().trim()

@@ -495,11 +495,13 @@ private fun DownloadAction(
     onDelete: () -> Unit = {},
 ) {
     when (status) {
-        ModelStatus.DOWNLOADED -> Icon(
-            painter = painterResource(R.drawable.ic_check),
-            contentDescription = "Downloaded",
-            tint = MaterialTheme.colorScheme.primary,
-        )
+        ModelStatus.DOWNLOADED -> IconButton(onClick = onDelete) {
+            Icon(
+                painter = painterResource(R.drawable.ic_delete),
+                contentDescription = "Delete model",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         ModelStatus.DOWNLOADING -> IconButton(onClick = onCancelDownload) {
             Icon(painterResource(R.drawable.ic_close), contentDescription = "Cancel download")
         }

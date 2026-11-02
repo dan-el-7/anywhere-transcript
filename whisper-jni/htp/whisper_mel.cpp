@@ -77,7 +77,9 @@ void fft(const float* in, int n, int stride, float* out /* interleaved re,im */)
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_anywhere_transcript_engine_HtpWhisper_nativeMelInit(JNIEnv* env, jobject,
                                                                  jstring jFiltersPath, jint nMel) {
+    if (!jFiltersPath) return JNI_FALSE;
     const char* c = env->GetStringUTFChars(jFiltersPath, nullptr);
+    if (!c) return JNI_FALSE;
     FILE* f = fopen(c, "rb");
     env->ReleaseStringUTFChars(jFiltersPath, c);
     if (!f) {
@@ -91,6 +93,7 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeMelInit(JNIEnv* env, jobjec
     if (got != g_filters.size()) {
         LOGE("mel filters short read: %zu", got);
         g_filters.clear();
+        g_nmel = 0;
         return JNI_FALSE;
     }
     for (int i = 0; i < N_FFT; i++)
@@ -155,6 +158,7 @@ Java_com_anywhere_transcript_engine_HtpWhisper_nativeMel(JNIEnv* env, jobject,
     float lo = mmax - 8.0f;
 
     jshortArray out = env->NewShortArray(g_nmel * N_FRAMES);
+    if (!out) return nullptr;
     std::vector<int16_t> q((size_t)g_nmel * N_FRAMES);
     for (size_t i = 0; i < mel.size(); i++) {
         float v = mel[i] < lo ? lo : mel[i];

@@ -197,15 +197,13 @@ class TranscriptionCoordinator(
                     if (useQnn) {
                         // live partials stream into the UI; the authoritative window
                         // text is appended once the window's decode finishes
-                        var streamed = ""
                         val windowText = QnnWhisperEngine.transcribeWindow(
                             context,
                             window,
                             s.language.ifBlank { "auto" },
                             translate = s.translateToEnglish,
-                            onPartialText = { delta ->
-                                streamed += delta
-                                val currentText = if (text.isEmpty()) streamed.trim() else "${text.toString().trim()} ${streamed.trim()}"
+                            onPartialText = { partialWindowText ->
+                                val currentText = if (text.isEmpty()) partialWindowText.trim() else "${text.toString().trim()} ${partialWindowText.trim()}"
                                 bus.update { it.copy(partialText = currentText) }
                             },
                             isCancelled = { TranscriptionBus.cancelRequested },
@@ -214,8 +212,8 @@ class TranscriptionCoordinator(
                         if (windowText.isNotEmpty()) {
                             segments.add(TranscriptSegment(windowStartMs, windowStartMs + windowMs, windowText))
                             text.append(windowText).append(' ')
-                            bus.update { it.copy(partialText = text.toString().trim()) }
                         }
+                        bus.update { it.copy(partialText = text.toString().trim()) }
                         val peak = window.maxOf { kotlin.math.abs(it) }
                         val rms = kotlin.math.sqrt(window.map { it * it }.average().coerceAtLeast(0.0)).toFloat()
                         Log.i(

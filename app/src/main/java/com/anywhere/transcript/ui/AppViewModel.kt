@@ -65,11 +65,10 @@ class AppViewModel(app: android.app.Application) : AndroidViewModel(app) {
         effectiveTier.map { ModelCatalog.recommendedFor(it) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ModelCatalog.recommendedFor(autoTier.value))
 
-    /** First-run onboarding: shows until dismissed, or once any model exists. */
+    /** First-run onboarding: shows until dismissed or explicitly completed. */
     val needsOnboarding: StateFlow<Boolean> =
-        combine(settings, modelStates) { s, states ->
-            !s.onboardingDone && states.values.none { it.status == ModelStatus.DOWNLOADED }
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        settings.map { s -> !s.onboardingDone && s.modelId == null }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     /** Marks onboarding done; [modelId] is the picked model (null = skip). */
     fun finishOnboarding(modelId: String?) {

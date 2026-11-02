@@ -121,25 +121,28 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(vm: AppViewModel, pendingShare: MutableStateFlow<MainActivity.PendingShare?>) {
     val onboarding by vm.needsOnboarding.collectAsStateWithLifecycle()
-    if (onboarding) {
-        com.anywhere.transcript.ui.screens.OnboardingScreen(vm)
-        return
-    }
+    val pending by pendingShare.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    val pending by pendingShare.collectAsStateWithLifecycle()
 
     // System back gesture: leave Settings first, then collapse to the home tab.
     BackHandler(enabled = showSettings) { showSettings = false }
     BackHandler(enabled = !showSettings && tab != 0) { tab = 0 }
 
-    LaunchedEffect(pending) {
-        pending?.let { p ->
-            tab = 0
-            vm.requestTranscribe(p.uri, p.name, p.backendOverride)
-            pendingShare.value = null
+    LaunchedEffect(pending, onboarding) {
+        if (!onboarding) {
+            pending?.let { p ->
+                tab = 0
+                vm.requestTranscribe(p.uri, p.name, p.backendOverride)
+                pendingShare.value = null
+            }
         }
+    }
+
+    if (onboarding) {
+        com.anywhere.transcript.ui.screens.OnboardingScreen(vm)
+        return
     }
 
     Scaffold(

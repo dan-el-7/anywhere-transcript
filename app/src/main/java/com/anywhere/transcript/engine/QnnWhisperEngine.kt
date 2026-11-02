@@ -57,21 +57,13 @@ object QnnWhisperEngine {
     @Volatile
     var cancelCheck: () -> Boolean = { false }
 
-    private var lastDecodedText = ""
-
     private val listener = object : HtpWhisper.Listener {
         override fun onPartial(ids: IntArray): Boolean {
             if (cancelCheck()) return false
             val v = vocab ?: return true
-            val full = v.decode(ids)
-            if (full.length > lastDecodedText.length) {
-                val delta = if (full.startsWith(lastDecodedText)) {
-                    full.substring(lastDecodedText.length)
-                } else {
-                    full.removePrefix(lastDecodedText)
-                }
-                if (delta.isNotEmpty()) partialSink?.invoke(delta)
-                lastDecodedText = full
+            val full = v.decode(ids).trim()
+            if (full.isNotEmpty()) {
+                partialSink?.invoke(full)
             }
             return true
         }
@@ -177,6 +169,7 @@ object QnnWhisperEngine {
      * [translate] = true swaps the task token to TRANSLATE → English output.
      * [onPartialText] receives streaming text as tokens are decoded.
      */
+    @Synchronized
     fun transcribeWindow(
         context: Context,
         pcm: FloatArray,
@@ -191,35 +184,39 @@ object QnnWhisperEngine {
         }
         val v = vocab ?: return ""
 
-        lastDecodedText = ""
-        partialSink = onPartialText
-        cancelCheck = isCancelled
+        try {
+            partialSink = onPartialText
+            cancelCheck = isCancelled
 
-        val clipped = if (pcm.size > SAMPLES_PER_WINDOW) pcm.copyOf(SAMPLES_PER_WINDOW) else pcm
-        val padded = if (clipped.size < SAMPLES_PER_WINDOW) {
-            clipped.copyOf(SAMPLES_PER_WINDOW) // zero-padded to the fixed 30s shape
-        } else clipped
+            val clipped = if (pcm.size > SAMPLES_PER_WINDOW) pcm.copyOf(SAMPLES_PER_WINDOW) else pcm
+            val padded = if (clipped.size < SAMPLES_PER_WINDOW) {
+                clipped.copyOf(SAMPLES_PER_WINDOW) // zero-padded to the fixed 30s shape
+            } else clipped
 
-        val mel = HtpWhisper.nativeMel(padded, fp16Out = true)
-            ?: run { Log.e(TAG, "mel failed"); return "" }
+            val mel = HtpWhisper.nativeMel(padded, fp16Out = true)
+                ?: run { Log.e(TAG, "mel failed"); return "" }
 
-        val langId = if (translate) LANG_FIRST else langToken(languageIso)
-        // Empirically (see probe logs 09-07): this AI Hub export ignores the
-        // task-token slot — every task id 50357..50361 yields identical output.
-        // Output language is driven by the LANGUAGE token instead: pre-fix runs
-        // with <|en|> conditioning translated foreign speech to English even on
-        // the transcribe task. So translate=true forces <|en|> + <|translate|>
-        // (kept for prompt-shape fidelity with whisper.cpp).
-        val task = if (translate) TRANSLATE else TRANSCRIBE
-        val prompt = intArrayOf(SOT, langId, task, NOTIMESTAMPS)
-        Log.i(TAG, "qnn prompt=${prompt.contentToString()} translate=$translate")
+            val langId = if (translate) LANG_FIRST else langToken(languageIso)
+            // Empirically (see probe logs 09-07): this AI Hub export ignores the
+            // task-token slot — every task id 50357..50361 yields identical output.
+            // Output language is driven by the LANGUAGE token instead: pre-fix runs
+            // with <|en|> conditioning translated foreign speech to English even on
+            // the transcribe task. So translate=true forces <|en|> + <|translate|>
+            // (kept for prompt-shape fidelity with whisper.cpp).
+            val task = if (translate) TRANSLATE else TRANSCRIBE
+            val prompt = intArrayOf(SOT, langId, task, NOTIMESTAMPS)
+            Log.i(TAG, "qnn prompt=${prompt.contentToString()} translate=$translate")
 
-        val metrics = FloatArray(4)
-        val tokens = HtpWhisper.nativeTranscribe(handle, mel, prompt, metrics)
-            ?: run { Log.e(TAG, "transcribe failed (metrics no_speech=${metrics.getOrElse(1) { 0f }})"); return "" }
+            val metrics = FloatArray(4)
+            val tokens = HtpWhisper.nativeTranscribe(handle, mel, prompt, metrics)
+                ?: run { Log.e(TAG, "transcribe failed (metrics no_speech=${metrics.getOrElse(1) { 0f }})"); return "" }
 
-        val text = v.decode(tokens).trim()
-        Log.d(TAG, "window: ${tokens.size} tokens, no_speech=${"%.3f".format(metrics.getOrElse(1) { 0f })}")
-        return text
+            val text = v.decode(tokens).trim()
+            Log.d(TAG, "window: ${tokens.size} tokens, no_speech=${"%.3f".format(metrics.getOrElse(1) { 0f })}")
+            return text
+        } finally {
+            partialSink = null
+            cancelCheck = { false }
+        }
     }
 }

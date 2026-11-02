@@ -151,10 +151,6 @@ class DownloadService : Service() {
         // Same OEM fallback chain as TranscriptionService ("type none" on some
         // Android 15 builds via the androidx path).
         val attempts = when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM -> listOf(
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,
-            )
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> listOf(
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )

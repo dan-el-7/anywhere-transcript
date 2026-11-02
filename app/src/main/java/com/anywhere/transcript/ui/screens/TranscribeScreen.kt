@@ -103,7 +103,8 @@ private fun IdleContent(vm: AppViewModel, onGoToModels: () -> Unit, onPick: () -
     val ctx = LocalContext.current
     val tier by vm.effectiveTier.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val selected = remember(settings.modelId, tier) { vm.selectedModel() }
+    val modelStates by vm.modelStates.collectAsStateWithLifecycle()
+    val selected = remember(settings.modelId, tier, modelStates) { vm.selectedModel() }
     val backends = remember { vm.backends }
 
     val gpu = backends.firstOrNull { it.isGpu && !it.name.startsWith("HTP") && !it.name.contains("Hexagon", true) }

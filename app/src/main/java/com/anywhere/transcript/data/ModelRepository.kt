@@ -79,8 +79,8 @@ class ModelRepository(
         // every entry and a wholesale reset would hide a running download.
         _states.update { cur ->
             val out = cur.toMutableMap()
-            ModelCatalog.all
-                .filter { isDownloaded(it.id) }
+            val all = ModelCatalog.all + (customModels?.all?.value ?: emptyList())
+            all.filter { isDownloaded(it.id) }
                 .forEach { m ->
                     val st = cur[m.id]
                     if (st == null || st.status != ModelStatus.DOWNLOADING) {
@@ -112,14 +112,26 @@ class ModelRepository(
             qnnDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
     }
 
-    fun downloadedModels(): List<ModelInfo> = ModelCatalog.all.filter { isDownloaded(it.id) }
+    fun downloadedModels(): List<ModelInfo> {
+        val builtIn = ModelCatalog.all.filter { isDownloaded(it.id) }
+        val custom = customModels?.all?.value?.filter { isDownloaded(it.id) } ?: emptyList()
+        return builtIn + custom
+    }
 
     /**
      * The model to use (see [ModelCatalog.selectModel]); null when no ggml
      * model is usable at all.
      */
-    fun selectedOrDefault(settings: AppSettings, tier: DeviceTier): ModelInfo? =
-        ModelCatalog.selectModel(settings, tier) { id -> isDownloaded(id) }
+    fun selectedOrDefault(settings: AppSettings, tier: DeviceTier): ModelInfo? {
+        settings.modelId?.let { id ->
+            if (id.startsWith("custom-")) {
+                customModels?.all?.value?.firstOrNull { it.id == id }?.let {
+                    if (isDownloaded(it.id)) return it
+                }
+            }
+        }
+        return ModelCatalog.selectModel(settings, tier) { id -> isDownloaded(id) }
+    }
 
     fun download(model: ModelInfo) {
         if (jobs.containsKey(model.id) || isDownloaded(model.id)) return
